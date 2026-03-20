@@ -1,0 +1,89 @@
+********************************************************************************
+Obsolete PIO Core v6.1.18 is used (previous was 6.1.19)
+Please remove multiple PIO Cores from a system:
+https://docs.platformio.org/en/latest/core/installation/troubleshooting.html
+********************************************************************************
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- Terminal on /dev/cu.usbserial-A10N20X1 | 115200 8-N-1
+--- Available filters and text transformations: colorize, debug, default, direct, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+# ── Ball-and-Beam Controller ──────────────────
+# SHARP_K      = 27.86 V·cm
+# SHARP_OFFSET = 0.00 cm
+# D_MIN        = 8.00 cm
+# D_MAX        = 20.20 cm
+# Setpoint     = 14.10 cm
+# Kp = 15.00  Ki = 0.00  Kd = 8.00
+# DT = 40 ms
+# EMA_ALPHA    = 0.20
+# STEP_LIMIT   = ±400 steps (±45.0°)
+# DIR_SIGN     = -1
+# Armed        = NO
+# Commands: G(arm)  X(disarm)  S<d_cm>  R  H  C  ?
+# ────────────────────────────────────────────────
+t_ms,d_raw_cm,d_filt_cm,error_cm,integral_cms,p_steps,i_steps,d_steps,n_target,step_pos
+# Integrator and derivative state reset
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive
+--- forcing DTR inactive
+--- forcing RTS inactive

@@ -154,11 +154,19 @@ static const int32_t MAX_STEPS_LOOP = 150;
 // In normal regulation the actual rate is < 500 steps/s.
 static const uint32_t STEP_PERIOD_US = 200;
 
+// Soft-start ramp parameters to avoid abrupt 0→5000 steps/s jumps.
+// Pulses start slower and ramp toward STEP_PERIOD_US over STEP_RAMP_STEPS.
+static const uint32_t STEP_START_PERIOD_US   = 900;
+static const uint16_t STEP_RAMP_STEPS        = 24;
+
+// Extra settle time when reversing direction to reduce hammering/missed steps.
+static const uint32_t DIR_REVERSE_SETTLE_US  = 1200;
+
 // DIR polarity:  +1 means HIGH on DIR pin = motor-side-up (positive θ).
 // Set to -1 if the motor is wired with reversed direction.
 // Verify by issuing a small positive step command and checking beam tilts
 // motor-side-up before closing the loop.
-static const int8_t DIR_SIGN        = +1;
+static const int8_t DIR_SIGN        = -1;
 
 
 // ================================================================
@@ -187,15 +195,15 @@ static const uint8_t  PRINT_EVERY   = 5;       // print 1 in 5 loops = every 200
 //  When tuning: start with Kp only (Ki=Kd=0), add Kd next,
 //  then add Ki last to eliminate steady-state offset.
 
-static const float KP               = 3.836f;  // steps/cm
-static const float KI               = 1.483f;  // steps/(cm·s)
-static const float KD               = 1.401f;  // step·s/cm
+static const float KP               = 15.0f;   // reduced overshoot energy
+static const float KI               = 0.0f;    // still off
+static const float KD               = 8.0f;    // nearly 3× more damping — ζ safe across full range
 
 // EMA filter coefficient on the distance measurement.
 // Applied before the derivative to suppress ADC noise.
 // α = 1.0 = no filtering.  α = 0.4 → ~1.6 Hz effective BW at 25 Hz.
 // Derivative noise with α=0.4: ~0.6 steps RMS — acceptable.
-static const float EMA_ALPHA        = 0.4f;
+static const float EMA_ALPHA        = 0.20f;   // THE FIX. Was 0.05.
 
 // Integrator anti-windup: clamp the integral contribution to
 // ±INTEG_CLAMP_STEPS steps.  Prevents runaway accumulation when
@@ -212,6 +220,9 @@ static float    g_prev_d_filt = C_D_CM;     // previous filtered distance [cm]
 static float    g_d_filt      = C_D_CM;     // EMA-filtered distance [cm]
 static float    g_setpoint    = C_D_CM;     // current setpoint in d-space [cm]
 static uint32_t g_last_ms     = 0;
+
+// Host-start gating: controller stays disarmed after boot until 'G' command.
+static bool     g_control_armed = false;
 
 // Calibration mode flag (toggle with 'C' command)
 static bool     g_cal_mode    = false;
@@ -244,7 +255,7 @@ void setup() {
     pinMode(PIN_EN,   OUTPUT);
     digitalWrite(PIN_STEP, LOW);
     digitalWrite(PIN_DIR,  LOW);
-    digitalWrite(PIN_EN,   LOW);    // LOW = driver enabled (ENN is active-low)
+    digitalWrite(PIN_EN,   HIGH);   // HIGH = driver disabled until host explicitly arms
 
     // ADC — use AVCC (5 V) as reference
     analogReference(DEFAULT);
@@ -266,11 +277,17 @@ void setup() {
 //  loop()
 // ================================================================
 void loop() {
+    // Always service serial first so arming/disarming is responsive.
+    parse_serial();
+
+    // Safe idle state after boot/reset: no motion until armed by host command.
+    if (!g_control_armed) {
+        return;
+    }
+
     // ── Fixed-period gate ──────────────────────────────────────────
     uint32_t now = millis();
     if ((now - g_last_ms) < LOOP_MS) {
-        // While waiting, service the serial receive buffer
-        parse_serial();
         return;
     }
     g_last_ms = now;
@@ -303,8 +320,6 @@ void loop() {
         print_telemetry(d_raw, g_d_filt, n_target);
     }
 
-    // ── 6. Serial commands ─────────────────────────────────────────
-    parse_serial();
 }
 
 
@@ -364,11 +379,16 @@ int32_t pid_update(float d_filt_cm) {
     g_p_term = KP * error;
 
     // ── Integral with anti-windup ──────────────────────────────────
-    g_integral += error * DT;
-    float integ_max = INTEG_CLAMP_STEPS / KI;
-    if      (g_integral >  integ_max) g_integral =  integ_max;
-    else if (g_integral < -integ_max) g_integral = -integ_max;
-    g_i_term = KI * g_integral;
+    if (KI > 0.0f) {
+        g_integral += error * DT;
+        float integ_max = INTEG_CLAMP_STEPS / KI;
+        if      (g_integral >  integ_max) g_integral =  integ_max;
+        else if (g_integral < -integ_max) g_integral = -integ_max;
+        g_i_term = KI * g_integral;
+    } else {
+        g_integral = 0.0f;
+        g_i_term   = 0.0f;
+    }
 
     // ── Derivative on measurement (avoids setpoint-step kick) ──────
     float d_rate = (d_filt_cm - g_prev_d_filt) / DT;   // [cm/s]
@@ -400,6 +420,8 @@ int32_t pid_update(float d_filt_cm) {
 //  sign convention — flip it if the beam tilts the wrong way.
 // ================================================================
 void step_to_abs(int32_t target) {
+    if (!g_control_armed) return;
+
     int32_t delta = target - g_step_pos;
 
     // Clamp per-loop excursion
@@ -409,17 +431,47 @@ void step_to_abs(int32_t target) {
     if (delta == 0) return;
 
     // Set direction pin
+    static int8_t s_prev_dir = 0;
+    int8_t dir_sign_cmd = (delta > 0) ? 1 : -1;
+
     bool dir_high = (DIR_SIGN > 0) ? (delta > 0) : (delta < 0);
     digitalWrite(PIN_DIR, dir_high ? HIGH : LOW);
+
+    // Extra settle when reversing sign to avoid hard mechanical hammering.
+    if (s_prev_dir != 0 && dir_sign_cmd != s_prev_dir) {
+        delayMicroseconds(DIR_REVERSE_SETTLE_US);
+    }
+    s_prev_dir = dir_sign_cmd;
+
     delayMicroseconds(4);   // DIR setup time ≥ 20 ns (TMC2209 spec); 4 µs is safe
 
     // Issue step pulses
     int32_t n_steps = (delta > 0) ? delta : -delta;
+    uint16_t ramp_steps = STEP_RAMP_STEPS;
+    if (ramp_steps > (uint16_t)(n_steps / 2)) {
+        ramp_steps = (uint16_t)(n_steps / 2);
+    }
+
     for (int32_t i = 0; i < n_steps; i++) {
+        uint32_t period_us = STEP_PERIOD_US;
+
+        if (ramp_steps > 0) {
+            if (i < ramp_steps) {
+                // Acceleration ramp (start slow, approach cruise speed)
+                period_us = STEP_START_PERIOD_US
+                          - ((STEP_START_PERIOD_US - STEP_PERIOD_US) * (uint32_t)(i + 1)) / ramp_steps;
+            } else if (i >= (n_steps - ramp_steps)) {
+                // Deceleration ramp before move end
+                uint32_t j = (uint32_t)(n_steps - 1 - i);
+                period_us = STEP_START_PERIOD_US
+                          - ((STEP_START_PERIOD_US - STEP_PERIOD_US) * (j + 1)) / ramp_steps;
+            }
+        }
+
         digitalWrite(PIN_STEP, HIGH);
         delayMicroseconds(5);               // pulse width ≥ 100 ns; 5 µs is safe
         digitalWrite(PIN_STEP, LOW);
-        delayMicroseconds(STEP_PERIOD_US - 5);
+        if (period_us > 6) delayMicroseconds(period_us - 5);
     }
 
     g_step_pos += delta;
@@ -434,6 +486,8 @@ void step_to_abs(int32_t target) {
 //
 //  S<float>   New setpoint [cm], validated against [D_MIN_CM, D_MAX_CM]
 //  R          Reset integrator and derivative state
+//  G          Arm control and enable motor driver
+//  X          Disarm control and disable motor driver
 //  H          Re-print CSV header
 //  C          Toggle calibration (raw ADC) mode
 //  ?          Print configuration summary
@@ -473,6 +527,21 @@ void parse_serial() {
                     g_integral    = 0.0f;
                     g_prev_d_filt = g_d_filt;
                     Serial.println(F("# Integrator and derivative state reset"));
+
+                } else if (cmd == 'G' || cmd == 'g') {
+                    // ── Arm control and enable driver ────────────────
+                    g_control_armed = true;
+                    g_integral      = 0.0f;
+                    g_prev_d_filt   = g_d_filt;
+                    g_last_ms       = millis();
+                    digitalWrite(PIN_EN, LOW);   // ENN active-low: LOW = enabled
+                    Serial.println(F("# Control ARMED, driver ENABLED"));
+
+                } else if (cmd == 'X' || cmd == 'x') {
+                    // ── Disarm control and disable driver ─────────────
+                    g_control_armed = false;
+                    digitalWrite(PIN_EN, HIGH);  // ENN active-low: HIGH = disabled
+                    Serial.println(F("# Control DISARMED, driver DISABLED"));
 
                 } else if (cmd == 'H' || cmd == 'h') {
                     // ── Re-print header ───────────────────────────────
@@ -551,6 +620,7 @@ void print_config() {
     Serial.print  (F(" steps (±")); Serial.print(STEP_LIMIT * 360.0f / STEPS_PER_REV, 1);
     Serial.println(F("°)"));
     Serial.print  (F("# DIR_SIGN     = ")); Serial.println(DIR_SIGN);
-    Serial.println(F("# Commands: S<d_cm>  R  H  C  ?"));
+    Serial.print  (F("# Armed        = ")); Serial.println(g_control_armed ? F("YES") : F("NO"));
+    Serial.println(F("# Commands: G(arm)  X(disarm)  S<d_cm>  R  H  C  ?"));
     Serial.println(F("# ────────────────────────────────────────────────"));
 }
