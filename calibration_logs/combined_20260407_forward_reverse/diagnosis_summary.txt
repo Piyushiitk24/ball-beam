@@ -1,0 +1,20 @@
+Combined forward/reverse calibration diagnosis
+forward_source: calibration_logs/20260407_103749/cleaned_forward_calibration.csv
+reverse_source: calibration_logs/20260407_121037/calibration_data.csv
+combined_csv: calibration_logs/combined_20260407_forward_reverse/combined_cleaned_calibration.csv
+
+forward_points: 112
+reverse_points: 68
+forward_fit: theta = 0.07643165 * as5600 + -23.62396718, zero=309.08617, rms=0.051711, max=0.128932
+reverse_fit: theta = 0.07313621 * as5600 + -22.15152533, zero=302.88043, rms=0.059366, max=0.142116
+reverse_zero_center_observed: 303.07638
+
+hysteresis_overlap_samples: 112
+hysteresis_mean_reverse_minus_forward_deg: 0.418304
+hysteresis_mean_abs_deg: 0.418304
+hysteresis_rms_deg: 0.422307
+hysteresis_max_abs_deg: 0.600000
+zero_shift_as5600_deg: 6.205747
+zero_shift_microsteps: 55.16
+
+diagnosis: significant direction-dependent offset; use data for telemetry/model insight, not as final controller calibration.

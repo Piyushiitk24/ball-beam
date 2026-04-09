@@ -1,0 +1,474 @@
+{
+  "generated_at": "2026-04-07T10:50:44",
+  "rows_total": 113,
+  "rows_forward": 111,
+  "rows_reverse": 0,
+  "rows_endpoints": 2,
+  "affine_fit": {
+    "slope": 0.029349976208580573,
+    "intercept": -8.216751314857447,
+    "rms_error_deg": 0.5198286518620978,
+    "max_abs_error_deg": 1.4080630617176797
+  },
+  "monotone_lut_fit": {
+    "direction": "increasing",
+    "rms_error_deg": 0.30986480792442456,
+    "max_abs_error_deg": 1.3016949152542376,
+    "lut_points": [
+      {
+        "as5600_deg_unwrapped": 290.39062,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 290.83007,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 291.26266,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 291.70898,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 292.19372,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 292.67578,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 293.14135,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 293.59176,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 293.99414,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 294.3457,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 294.78656,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 295.2315,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 295.75195,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 296.27789,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 296.71875,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 297.1582,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 297.56332,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 297.95062,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 298.38867,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 298.82812,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 299.3294,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 299.88281,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 300.32226,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 300.74932,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 301.11328,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 301.55273,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 301.99218,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 302.43164,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 302.95483,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 303.39843,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 303.91888,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 304.30889,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 304.71679,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 305.15625,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 305.59429,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 306.03515,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 306.535,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 307.00195,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 307.52929,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 307.88085,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 308.32031,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 308.75976,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 309.18133,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 309.63867,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 310.15502,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 310.60958,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 311.12731,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 311.57226,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 311.98147,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 312.36328,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 312.81512,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 313.32458,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 313.76953,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 314.29687,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 314.73632,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 315.19226,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 315.61523,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 316.03683,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 316.49414,
+        "beam_theta_deg": 0.5983050847457624
+      },
+      {
+        "as5600_deg_unwrapped": 316.93359,
+        "beam_theta_deg": 0.6
+      },
+      {
+        "as5600_deg_unwrapped": 317.38128,
+        "beam_theta_deg": 0.6
+      },
+      {
+        "as5600_deg_unwrapped": 317.96353,
+        "beam_theta_deg": 0.7
+      },
+      {
+        "as5600_deg_unwrapped": 318.42773,
+        "beam_theta_deg": 0.7
+      },
+      {
+        "as5600_deg_unwrapped": 318.86718,
+        "beam_theta_deg": 0.7
+      },
+      {
+        "as5600_deg_unwrapped": 319.22146,
+        "beam_theta_deg": 0.8
+      },
+      {
+        "as5600_deg_unwrapped": 319.6582,
+        "beam_theta_deg": 0.8
+      },
+      {
+        "as5600_deg_unwrapped": 320.09765,
+        "beam_theta_deg": 0.8
+      },
+      {
+        "as5600_deg_unwrapped": 320.56735,
+        "beam_theta_deg": 0.9
+      },
+      {
+        "as5600_deg_unwrapped": 321.06445,
+        "beam_theta_deg": 0.9
+      },
+      {
+        "as5600_deg_unwrapped": 321.59179,
+        "beam_theta_deg": 1.0
+      },
+      {
+        "as5600_deg_unwrapped": 322.03125,
+        "beam_theta_deg": 1.0
+      },
+      {
+        "as5600_deg_unwrapped": 322.4707,
+        "beam_theta_deg": 1.0
+      },
+      {
+        "as5600_deg_unwrapped": 322.88952,
+        "beam_theta_deg": 1.1
+      },
+      {
+        "as5600_deg_unwrapped": 323.30563,
+        "beam_theta_deg": 1.1
+      },
+      {
+        "as5600_deg_unwrapped": 323.70117,
+        "beam_theta_deg": 1.1
+      },
+      {
+        "as5600_deg_unwrapped": 324.22851,
+        "beam_theta_deg": 1.2
+      },
+      {
+        "as5600_deg_unwrapped": 324.66796,
+        "beam_theta_deg": 1.2
+      },
+      {
+        "as5600_deg_unwrapped": 325.19531,
+        "beam_theta_deg": 1.2
+      },
+      {
+        "as5600_deg_unwrapped": 325.64166,
+        "beam_theta_deg": 1.3
+      },
+      {
+        "as5600_deg_unwrapped": 326.07421,
+        "beam_theta_deg": 1.4
+      },
+      {
+        "as5600_deg_unwrapped": 326.51367,
+        "beam_theta_deg": 1.4
+      },
+      {
+        "as5600_deg_unwrapped": 326.95312,
+        "beam_theta_deg": 1.4
+      },
+      {
+        "as5600_deg_unwrapped": 327.39257,
+        "beam_theta_deg": 1.4
+      },
+      {
+        "as5600_deg_unwrapped": 327.83203,
+        "beam_theta_deg": 1.5
+      },
+      {
+        "as5600_deg_unwrapped": 328.35937,
+        "beam_theta_deg": 1.5
+      },
+      {
+        "as5600_deg_unwrapped": 328.85647,
+        "beam_theta_deg": 1.6
+      },
+      {
+        "as5600_deg_unwrapped": 329.32617,
+        "beam_theta_deg": 1.6
+      },
+      {
+        "as5600_deg_unwrapped": 329.75872,
+        "beam_theta_deg": 1.6
+      },
+      {
+        "as5600_deg_unwrapped": 330.15292,
+        "beam_theta_deg": 1.6
+      },
+      {
+        "as5600_deg_unwrapped": 330.55664,
+        "beam_theta_deg": 1.7
+      },
+      {
+        "as5600_deg_unwrapped": 330.99609,
+        "beam_theta_deg": 1.7
+      },
+      {
+        "as5600_deg_unwrapped": 331.51654,
+        "beam_theta_deg": 1.7
+      },
+      {
+        "as5600_deg_unwrapped": 331.96289,
+        "beam_theta_deg": 1.8
+      },
+      {
+        "as5600_deg_unwrapped": 332.49023,
+        "beam_theta_deg": 1.8
+      },
+      {
+        "as5600_deg_unwrapped": 332.93246,
+        "beam_theta_deg": 1.9
+      },
+      {
+        "as5600_deg_unwrapped": 333.45013,
+        "beam_theta_deg": 1.9
+      },
+      {
+        "as5600_deg_unwrapped": 333.80859,
+        "beam_theta_deg": 1.9
+      },
+      {
+        "as5600_deg_unwrapped": 334.24804,
+        "beam_theta_deg": 1.9
+      },
+      {
+        "as5600_deg_unwrapped": 334.6875,
+        "beam_theta_deg": 2.0
+      },
+      {
+        "as5600_deg_unwrapped": 335.12835,
+        "beam_theta_deg": 2.0
+      },
+      {
+        "as5600_deg_unwrapped": 335.65429,
+        "beam_theta_deg": 2.0
+      },
+      {
+        "as5600_deg_unwrapped": 336.18164,
+        "beam_theta_deg": 2.1
+      },
+      {
+        "as5600_deg_unwrapped": 336.62109,
+        "beam_theta_deg": 2.1
+      },
+      {
+        "as5600_deg_unwrapped": 337.06054,
+        "beam_theta_deg": 2.1
+      },
+      {
+        "as5600_deg_unwrapped": 337.5,
+        "beam_theta_deg": 2.2
+      },
+      {
+        "as5600_deg_unwrapped": 337.93667,
+        "beam_theta_deg": 2.2
+      },
+      {
+        "as5600_deg_unwrapped": 338.31301,
+        "beam_theta_deg": 2.2
+      },
+      {
+        "as5600_deg_unwrapped": 338.81835,
+        "beam_theta_deg": 2.3
+      },
+      {
+        "as5600_deg_unwrapped": 339.34155,
+        "beam_theta_deg": 2.3
+      },
+      {
+        "as5600_deg_unwrapped": 339.78652,
+        "beam_theta_deg": 2.4
+      },
+      {
+        "as5600_deg_unwrapped": 340.3125,
+        "beam_theta_deg": 2.4
+      },
+      {
+        "as5600_deg_unwrapped": 340.75195,
+        "beam_theta_deg": 2.4
+      },
+      {
+        "as5600_deg_unwrapped": 340.92773,
+        "beam_theta_deg": 2.4
+      }
+    ]
+  },
+  "hysteresis": null,
+  "recommended_model": "monotone_lut"
+}

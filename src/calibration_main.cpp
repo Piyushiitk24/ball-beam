@@ -24,6 +24,8 @@
  *       and auto-detect which microstep direction moves toward lower
  *    N  Move one fixed forward increment toward lower and capture
  *    B  Move one fixed reverse increment toward upper and capture
+ *       If only L has been captured, B runs a reverse-only pass using
+ *       REVERSE_ONLY_FORWARD_STEP_SIGN from the previous calibration.
  *    C  Clear sweep state in firmware by returning to the stored
  *       upper sweep start and resetting the relative step counter
  *    S  Print status
@@ -74,7 +76,7 @@ static const float    AS5600_RAW_TO_DEG       = 360.0f / 4096.0f;
 //  SECTION 3 — STEPPER PARAMETERS
 // ================================================================
 static const int32_t  STEPS_PER_REV           = 3200;   // 200 * 16 microsteps
-static const int32_t  SWEEP_STEP_MICROSTEPS   = 4;
+static const int32_t  SWEEP_STEP_MICROSTEPS   = 8;
 static const uint32_t STEP_PERIOD_US          = 800;    // calibration speed is intentionally gentle
 static const uint32_t STEP_PULSE_US           = 5;
 static const uint32_t DIR_SETUP_US            = 4;
@@ -86,6 +88,10 @@ static const float    LOWER_STOP_MARGIN_DEG   = 0.20f;
 
 // Keep the same logical direction convention as the controller.
 static const int8_t   DIR_SIGN                = -1;
+
+// Previous calibration showed forward-to-lower uses logical sign -1.
+// This lets B run a reverse-only L->U pass after only L is captured.
+static const int8_t   REVERSE_ONLY_FORWARD_STEP_SIGN = -1;
 
 
 // ================================================================
@@ -392,7 +398,7 @@ void handle_lower_capture() {
     }
 
     g_rel_steps = 0;          // manual moves invalidate relative step history
-    g_forward_step_sign = 0;  // direction must be re-established from endpoints
+    g_forward_step_sign = REVERSE_ONLY_FORWARD_STEP_SIGN;
 
     SampleRecord lower = {};
     if (!capture_sample('L', lower)) {
@@ -468,11 +474,15 @@ void handle_reverse_step() {
         print_error(F("driver_disabled"));
         return;
     }
-    if (!g_lower_sample.valid || !g_upper_sample.valid || g_forward_step_sign == 0) {
+    const bool full_sweep_mode = g_lower_sample.valid && g_upper_sample.valid
+                              && g_forward_step_sign != 0;
+    const bool reverse_only_mode = g_lower_sample.valid && !g_upper_sample.valid
+                                && g_forward_step_sign != 0;
+    if (!full_sweep_mode && !reverse_only_mode) {
         print_error(F("run_L_and_U_first"));
         return;
     }
-    if (g_rel_steps <= 0) {
+    if (full_sweep_mode && (g_rel_steps * (int32_t)g_forward_step_sign) <= 0) {
         print_error(F("already_at_upper_start"));
         return;
     }

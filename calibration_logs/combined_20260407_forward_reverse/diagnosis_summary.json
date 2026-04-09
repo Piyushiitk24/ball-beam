@@ -1,0 +1,44 @@
+{
+  "forward_source": "calibration_logs/20260407_103749/cleaned_forward_calibration.csv",
+  "reverse_source": "calibration_logs/20260407_121037/calibration_data.csv",
+  "combined_csv": "calibration_logs/combined_20260407_forward_reverse/combined_cleaned_calibration.csv",
+  "forward_points": 112,
+  "reverse_points": 68,
+  "forward_fit": {
+    "slope": 0.07643165327846885,
+    "intercept": -23.623967183288954,
+    "zero_as5600_deg": 309.08617267793596,
+    "rms_error_deg": 0.05171091835010573,
+    "max_abs_error_deg": 0.12893200012935035
+  },
+  "reverse_fit": {
+    "slope": 0.07313620631433196,
+    "intercept": -22.151525333108726,
+    "zero_as5600_deg": 302.88042611758846,
+    "rms_error_deg": 0.05936620916519694,
+    "max_abs_error_deg": 0.14211569724691842
+  },
+  "reverse_zero_center_as5600_deg": 303.07638,
+  "reverse_zero_rows": [
+    {
+      "sweep_index": 42,
+      "as5600_deg_unwrapped": 303.57421
+    },
+    {
+      "sweep_index": 43,
+      "as5600_deg_unwrapped": 302.57855
+    }
+  ],
+  "hysteresis": {
+    "overlap_samples": 112,
+    "overlap_min_as5600_deg": 290.39062,
+    "overlap_max_as5600_deg": 340.92773,
+    "mean_reverse_minus_forward_deg": 0.4183037229484917,
+    "mean_abs_deg": 0.4183037229484917,
+    "rms_deg": 0.4223066817185224,
+    "max_abs_deg": 0.6000000000000001
+  },
+  "motor_zero_shift_deg": 6.205746560347507,
+  "motor_zero_shift_microsteps": 55.16219164753339,
+  "diagnosis": "direction-dependent mapping/backlash or repeatability offset is significant; do not use a single AS5600-to-beam-angle map for final closed loop yet"
+}

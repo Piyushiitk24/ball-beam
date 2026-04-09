@@ -1,0 +1,23 @@
+AS5600-to-beam-angle calibration report
+generated_at: 2026-04-07T12:17:32
+rows_total: 68
+rows_forward: 0
+rows_reverse: 67
+rows_endpoints: 1
+
+affine_fit:
+  slope_deg_per_deg: 0.03471882
+  intercept_deg: -9.63431629
+  rms_error_deg: 0.565480
+  max_abs_error_deg: 1.229979
+
+monotone_lut_fit:
+  direction: increasing
+  rms_error_deg: 0.295797
+  max_abs_error_deg: 0.802941
+  lut_points: 68
+
+hysteresis:
+  unavailable
+
+recommended_model: monotone_lut
