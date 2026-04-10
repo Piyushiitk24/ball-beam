@@ -54,6 +54,11 @@ static const float    D_SETPOINT_MIDPOINT_CM    = 0.5f * (D_MIN_CM + D_MAX_CM);
 static const float    D_SETPOINT_TRIM_DEFAULT_CM = 0.00f;
 static const float    D_SETPOINT_DEFAULT_CM     =
     D_SETPOINT_MIDPOINT_CM + D_SETPOINT_TRIM_DEFAULT_CM;
+static const uint32_t STAIRCASE_STAGE_MS        = 20000UL;
+static const uint32_t STAIRCASE_TOTAL_MS        = 3UL * STAIRCASE_STAGE_MS;
+static const float    STAIRCASE_FAR_SETPOINT_CM = 12.16f;
+static const float    STAIRCASE_CENTER_SETPOINT_CM = D_SETPOINT_DEFAULT_CM;
+static const float    STAIRCASE_NEAR_SETPOINT_CM = 4.90f;
 
 static const float    DIST_EMA_ALPHA            = 0.25f;
 static const float    X_DOT_EMA_ALPHA           = 0.12f;
@@ -114,39 +119,53 @@ static const float    DT                         = 0.040f;
 static const uint8_t  PRINT_EVERY_DEFAULT        = 5;   // T stream: about 5 rows per second
 static const uint8_t  PRINT_EVERY_MIN            = 1;
 static const uint8_t  PRINT_EVERY_MAX            = 50;
-static const float    THETA_CMD_LIMIT_DEFAULT_DEG = 1.50f;
+static const float    THETA_CMD_LIMIT_DEFAULT_DEG = 2.00f;
 
-static const float    OUTER_KX_DEFAULT           = 0.34f;
-static const float    OUTER_KV_DEFAULT           = 0.10f;
+static const float    OUTER_KX_DEFAULT           = 0.28f;
+static const float    OUTER_KV_DEFAULT           = 0.20f;
 static const float    OUTER_KT_DEFAULT           = 0.00f;
 static const float    OUTER_KW_DEFAULT           = 0.00f;
-static const float    OUTER_KI_DEFAULT           = 0.030f;
-static const float    OUTER_INTEGRAL_CLAMP_DEG   = 0.20f;
-static const float    OUTER_INTEGRAL_CAPTURE_CM  = 2.20f;
-static const float    OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S = 0.50f;
+static const float    OUTER_KI_DEFAULT           = 0.020f;
+static const float    OUTER_INTEGRAL_CLAMP_DEG   = 0.18f;
+// Keep the integrator as a low-speed bias trimmer, not a transport actuator.
+// Allow it to help with sub-centimeter stalls, but keep it out of the
+// moderate-offset regime where it starts storing too much transport bias.
+static const float    OUTER_INTEGRAL_CAPTURE_CM  = 0.80f;
+static const float    OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S = 0.35f;
 // These bleed factors are applied on every 40 ms control cycle.
-static const float    OUTER_INTEGRAL_BLEED_OUTSIDE = 0.995f;
-static const float    OUTER_INTEGRAL_BLEED_RECOVERY = 0.998f;
-static const float    OUTER_INTEGRAL_BLEED_CENTER  = 0.992f;
-static const float    OUTER_INTEGRAL_BLEED_WRONG_SIGN = 0.80f;
+static const float    OUTER_INTEGRAL_BLEED_OUTSIDE = 1.000f;
+static const float    OUTER_INTEGRAL_BLEED_RECOVERY = 1.000f;
+static const float    OUTER_INTEGRAL_BLEED_CENTER  = 1.000f;
 static const float    OUTER_CENTER_BAND_CM       = 0.18f;
 static const float    OUTER_CENTER_BAND_X_DOT_CM_S = 0.35f;
-static const float    OUTER_X_DOT_LIMIT_CM_S     = 3.0f;
+static const float    OUTER_X_DOT_LIMIT_CM_S     = 4.50f;
 static const float    OUTER_THETA_DOT_LIMIT_DEG_S = 4.0f;
 static const float    OUTER_GAIN_SCALE_MIN       = 0.50f;
 static const float    OUTER_GAIN_SCALE_MAX       = 1.50f;
-static const float    RECOVERY_ENTER_X_CM        = 1.50f;
-static const float    RECOVERY_ENTER_X_DOT_CM_S  = 0.60f;
-static const uint8_t  RECOVERY_ENTER_COUNT       = 6;
-static const float    RECOVERY_EXIT_X_CM         = 0.45f;
-static const float    RECOVERY_EXIT_INWARD_X_DOT_CM_S = 0.90f;
-static const float    RECOVERY_FLOOR_DEFAULT_DEG = 0.95f;
+// Positive x means the ball is farther toward the motor/far side than the
+// current target. That transport direction is the one showing excess energy
+// in the recent staircase logs, so soften Kx, add damping, and weaken recovery.
+static const float    OUTER_POS_X_KX_SCALE       = 0.80f;
+static const float    OUTER_POS_X_KV_SCALE       = 1.75f;
+static const float    OUTER_POS_X_INWARD_BRAKE_BAND_CM = 2.00f;
+static const float    OUTER_POS_X_INWARD_EXTRA_KV = 0.30f;
+static const float    OUTER_POS_X_RECOVERY_SCALE = 0.75f;
+// Recovery is a minimum-corrective-angle floor used only for truly stalled,
+// off-center motion. Keep it out of the near-center regime, where it injects
+// energy and causes unnecessary crossovers.
+static const float    RECOVERY_ENTER_X_CM        = 1.20f;
+static const float    RECOVERY_ENTER_X_DOT_CM_S  = 0.35f;
+static const uint8_t  RECOVERY_ENTER_COUNT       = 4;
+static const float    RECOVERY_EXIT_X_CM         = 0.25f;
+static const float    RECOVERY_EXIT_HANDOFF_X_CM = 1.50f;
+static const float    RECOVERY_EXIT_INWARD_X_DOT_CM_S = 0.45f;
+static const float    RECOVERY_FLOOR_DEFAULT_DEG = 0.70f;
 static const float    RECOVERY_FLOOR_MIN_DEG     = 0.00f;
-static const float    RECOVERY_FLOOR_MAX_DEG     = 1.25f;
-static const float    RECOVERY_FLOOR_GAIN_DEG_PER_CM = 0.16f;
+static const float    RECOVERY_FLOOR_MAX_DEG     = 1.10f;
+static const float    RECOVERY_FLOOR_GAIN_DEG_PER_CM = 0.18f;
 static const float    ZERO_TRIM_EST_X_CM         = 0.25f;
 static const float    ZERO_TRIM_EST_X_DOT_CM_S   = 0.25f;
-static const float    ZERO_TRIM_EST_THETA_CMD_DEG = 0.12f;
+static const float    ZERO_TRIM_EST_THETA_TRACK_ERR_DEG = 0.10f;
 static const float    ZERO_TRIM_EST_THETA_DOT_DEG_S = 0.40f;
 static const float    ZERO_TRIM_EST_ALPHA        = 0.05f;
 
@@ -167,6 +186,12 @@ enum ControllerMode : uint8_t {
     MODE_CASCADE = 2,
 };
 
+enum StaircasePhase : uint8_t {
+    STAIRCASE_PHASE_FAR = 0,
+    STAIRCASE_PHASE_CENTER = 1,
+    STAIRCASE_PHASE_NEAR = 2,
+};
+
 struct DistanceSample {
     bool valid;
     float cm;
@@ -181,6 +206,9 @@ static bool           g_telemetry_stream    = false;
 static bool           g_print_once          = false;
 static uint8_t        g_print_every         = PRINT_EVERY_DEFAULT;
 static uint32_t       g_last_ms             = 0;
+static bool           g_staircase_active    = false;
+static uint32_t       g_staircase_start_ms  = 0;
+static StaircasePhase g_staircase_phase     = STAIRCASE_PHASE_FAR;
 
 static float          g_distance_window[3]  = {D_SETPOINT_DEFAULT_CM,
                                                D_SETPOINT_DEFAULT_CM,
@@ -251,6 +279,14 @@ void set_driver_enabled(bool enabled);
 void set_mode(ControllerMode mode);
 void reset_dynamic_state(void);
 void reset_distance_filter(void);
+void apply_setpoint_cm(float sp);
+void print_setpoint_announcement(void);
+void cancel_staircase(const __FlashStringHelper *reason);
+const __FlashStringHelper *staircase_phase_label(StaircasePhase phase);
+float staircase_phase_setpoint_cm(StaircasePhase phase);
+void set_staircase_phase(StaircasePhase phase);
+bool start_staircase(uint32_t now_ms);
+void update_staircase(uint32_t now_ms);
 bool is_immediate_serial_command(char c);
 void execute_serial_command(char *buf);
 void parse_serial(void);
@@ -306,6 +342,7 @@ void loop() {
         return;
     }
     g_last_ms = now;
+    update_staircase(now);
 
     DistanceSample distance = read_sharp_cm();
     float d_raw_print = distance.valid ? distance.cm : -1.0f;
@@ -562,11 +599,6 @@ float clamp_theta_rel_command(float theta_rel_deg) {
 
 float compute_full_state_theta_command(bool distance_valid) {
     float gain_scale = g_outer_gain_scale;
-    float kx = OUTER_KX_DEFAULT * gain_scale;
-    float kv = OUTER_KV_DEFAULT * gain_scale;
-    float kt = OUTER_KT_DEFAULT * gain_scale;
-    float kw = OUTER_KW_DEFAULT * gain_scale;
-    float ki = OUTER_KI_DEFAULT * gain_scale;
     float x_dot_ctrl = clamp_float(g_x_dot_cm_s,
                                    -OUTER_X_DOT_LIMIT_CM_S,
                                     OUTER_X_DOT_LIMIT_CM_S);
@@ -575,6 +607,22 @@ float compute_full_state_theta_command(bool distance_valid) {
                                         OUTER_THETA_DOT_LIMIT_DEG_S);
     float abs_x_cm = fabs(g_x_cm);
     float abs_x_dot_cm_s = fabs(x_dot_ctrl);
+    bool positive_x_side = g_x_cm > 0.0f;
+    float kx_scale = positive_x_side ? OUTER_POS_X_KX_SCALE : 1.0f;
+    float kv_scale = positive_x_side ? OUTER_POS_X_KV_SCALE : 1.0f;
+    float kx = OUTER_KX_DEFAULT * gain_scale * kx_scale;
+    float kv = OUTER_KV_DEFAULT * gain_scale * kv_scale;
+    if (positive_x_side && x_dot_ctrl < 0.0f) {
+        float inward_brake_weight =
+            clamp_float((OUTER_POS_X_INWARD_BRAKE_BAND_CM - abs_x_cm)
+                            / OUTER_POS_X_INWARD_BRAKE_BAND_CM,
+                        0.0f,
+                        1.0f);
+        kv += OUTER_POS_X_INWARD_EXTRA_KV * gain_scale * inward_brake_weight;
+    }
+    float kt = OUTER_KT_DEFAULT * gain_scale;
+    float kw = OUTER_KW_DEFAULT * gain_scale;
+    float ki = OUTER_KI_DEFAULT * gain_scale;
     bool moving_inward = distance_valid && ((g_x_cm * x_dot_ctrl) < 0.0f);
     bool in_capture_band = abs_x_cm <= OUTER_INTEGRAL_CAPTURE_CM
                         && abs_x_dot_cm_s <= OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S;
@@ -584,11 +632,14 @@ float compute_full_state_theta_command(bool distance_valid) {
                            && abs_x_cm >= RECOVERY_ENTER_X_CM
                            && abs_x_dot_cm_s <= RECOVERY_ENTER_X_DOT_CM_S;
 
+    bool recovery_handoff_ready = moving_inward
+                               && abs_x_cm <= RECOVERY_EXIT_HANDOFF_X_CM
+                               && abs_x_dot_cm_s >= RECOVERY_EXIT_INWARD_X_DOT_CM_S;
+
     if (g_recovery_active) {
         if (!distance_valid
                 || abs_x_cm <= RECOVERY_EXIT_X_CM
-                || (moving_inward
-                    && abs_x_dot_cm_s >= RECOVERY_EXIT_INWARD_X_DOT_CM_S)) {
+                || recovery_handoff_ready) {
             g_recovery_active = false;
             g_recovery_enter_counter = 0;
         }
@@ -611,10 +662,6 @@ float compute_full_state_theta_command(bool distance_valid) {
         g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_OUTSIDE;
     } else if (g_recovery_active) {
         g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_RECOVERY;
-    }
-    if (g_x_cm != 0.0f && g_outer_xi_cm_s != 0.0f
-            && (g_x_cm * g_outer_xi_cm_s) < 0.0f) {
-        g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_WRONG_SIGN;
     }
     if (in_center_band) {
         g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_CENTER;
@@ -642,7 +689,9 @@ float compute_full_state_theta_command(bool distance_valid) {
     bool clamped = fabs(fs_cmd_deg) > g_theta_cmd_limit_deg;
     bool command_is_corrective = (g_x_cm != 0.0f)
                               && ((g_x_cm * limited_cmd_deg * (float)g_outer_sign) > 0.0f);
-    bool can_integrate = distance_valid && in_capture_band
+    bool can_integrate = distance_valid
+                      && !g_recovery_active
+                      && in_capture_band
                       && !(clamped && command_is_corrective);
 
     if (can_integrate) {
@@ -670,18 +719,22 @@ float compute_full_state_theta_command(bool distance_valid) {
                                        g_theta_cmd_limit_deg);
     }
 
-    g_recovery_floor_active_deg = g_recovery_floor_deg;
+    float recovery_floor_scale = positive_x_side
+                               ? OUTER_POS_X_RECOVERY_SCALE
+                               : 1.0f;
+    g_recovery_floor_active_deg = g_recovery_floor_deg * recovery_floor_scale;
     if (g_recovery_active) {
         float dynamic_floor_deg = g_recovery_floor_deg
                                 + (RECOVERY_FLOOR_GAIN_DEG_PER_CM
                                    * clamp_float(abs_x_cm - RECOVERY_ENTER_X_CM,
                                                  0.0f,
                                                  10.0f));
+        dynamic_floor_deg *= recovery_floor_scale;
         g_recovery_floor_active_deg = clamp_float(dynamic_floor_deg,
                                                   RECOVERY_FLOOR_MIN_DEG,
                                                   RECOVERY_FLOOR_MAX_DEG);
     }
-    if (g_recovery_active && g_recovery_floor_deg > 0.0f && g_x_cm != 0.0f) {
+    if (g_recovery_active && g_recovery_floor_active_deg > 0.0f && g_x_cm != 0.0f) {
         float recovery_cmd_deg = (g_x_cm > 0.0f)
                                ? -g_recovery_floor_active_deg
                                :  g_recovery_floor_active_deg;
@@ -701,6 +754,7 @@ void reset_zero_trim_estimator() {
 }
 
 void update_zero_trim_estimator(bool distance_valid, bool theta_valid) {
+    float theta_track_err_deg = g_theta_cmd_rel_deg - g_theta_rel_deg;
     bool can_sample = (g_mode == MODE_CASCADE)
                    && g_driver_enabled
                    && distance_valid
@@ -709,7 +763,8 @@ void update_zero_trim_estimator(bool distance_valid, bool theta_valid) {
                    && !g_recovery_active
                    && (fabs(g_x_cm) <= ZERO_TRIM_EST_X_CM)
                    && (fabs(g_x_dot_cm_s) <= ZERO_TRIM_EST_X_DOT_CM_S)
-                   && (fabs(g_theta_cmd_rel_deg) <= ZERO_TRIM_EST_THETA_CMD_DEG)
+                   && (fabs(theta_track_err_deg)
+                       <= ZERO_TRIM_EST_THETA_TRACK_ERR_DEG)
                    && (fabs(g_theta_dot_deg_s) <= ZERO_TRIM_EST_THETA_DOT_DEG_S);
     if (!can_sample) {
         return;
@@ -836,6 +891,108 @@ void set_driver_enabled(bool enabled) {
 // ================================================================
 //  Serial command handling
 // ================================================================
+void apply_setpoint_cm(float sp) {
+    g_setpoint_cm = sp;
+    reset_zero_trim_estimator();
+    reset_dynamic_state();
+}
+
+void print_setpoint_announcement() {
+    Serial.print(F("# Setpoint -> "));
+    Serial.print(g_setpoint_cm, 2);
+    Serial.println(POSITION_CALIBRATED
+        ? F(" cm")
+        : F(" cm (provisional, position calibration still false)"));
+}
+
+void cancel_staircase(const __FlashStringHelper *reason) {
+    if (!g_staircase_active) {
+        return;
+    }
+
+    g_staircase_active = false;
+    Serial.print(F("# Staircase CANCELLED"));
+    if (reason != NULL) {
+        Serial.print(F(" -> "));
+        Serial.println(reason);
+    } else {
+        Serial.println();
+    }
+}
+
+const __FlashStringHelper *staircase_phase_label(StaircasePhase phase) {
+    switch (phase) {
+        case STAIRCASE_PHASE_FAR:
+            return F("FAR");
+        case STAIRCASE_PHASE_CENTER:
+            return F("CENTER");
+        case STAIRCASE_PHASE_NEAR:
+            return F("NEAR");
+        default:
+            return F("UNKNOWN");
+    }
+}
+
+float staircase_phase_setpoint_cm(StaircasePhase phase) {
+    switch (phase) {
+        case STAIRCASE_PHASE_FAR:
+            return STAIRCASE_FAR_SETPOINT_CM;
+        case STAIRCASE_PHASE_CENTER:
+            return STAIRCASE_CENTER_SETPOINT_CM;
+        case STAIRCASE_PHASE_NEAR:
+        default:
+            return STAIRCASE_NEAR_SETPOINT_CM;
+    }
+}
+
+void set_staircase_phase(StaircasePhase phase) {
+    g_staircase_phase = phase;
+    apply_setpoint_cm(staircase_phase_setpoint_cm(phase));
+    Serial.print(F("# Staircase phase -> "));
+    Serial.print(staircase_phase_label(phase));
+    Serial.print(F(" ("));
+    Serial.print(g_setpoint_cm, 2);
+    Serial.println(F(" cm)"));
+}
+
+bool start_staircase(uint32_t now_ms) {
+    if (g_staircase_active) {
+        Serial.println(F("# ERR: staircase already active"));
+        return false;
+    }
+
+    g_staircase_active = true;
+    g_staircase_start_ms = now_ms;
+    Serial.println(F("# Staircase START"));
+    set_staircase_phase(STAIRCASE_PHASE_FAR);
+    return true;
+}
+
+void update_staircase(uint32_t now_ms) {
+    if (!g_staircase_active) {
+        return;
+    }
+
+    uint32_t elapsed_ms = now_ms - g_staircase_start_ms;
+    if (elapsed_ms >= STAIRCASE_TOTAL_MS) {
+        g_staircase_active = false;
+        Serial.println(F("# Staircase COMPLETE -> driver disabled"));
+        set_driver_enabled(false);
+        return;
+    }
+
+    StaircasePhase next_phase = STAIRCASE_PHASE_FAR;
+    if (elapsed_ms >= (2UL * STAIRCASE_STAGE_MS)) {
+        next_phase = STAIRCASE_PHASE_NEAR;
+    } else if (elapsed_ms >= STAIRCASE_STAGE_MS) {
+        next_phase = STAIRCASE_PHASE_CENTER;
+    }
+
+    if (next_phase != g_staircase_phase) {
+        set_staircase_phase(next_phase);
+    }
+}
+
 void set_mode(ControllerMode mode) {
     if (mode == MODE_CASCADE && !POSITION_CALIBRATED) {
         Serial.println(F("# ERR: M2 disabled until POSITION_CALIBRATED is true"));
@@ -846,6 +1003,7 @@ void set_mode(ControllerMode mode) {
         return;
     }
 
+    cancel_staircase(F("mode change"));
     g_mode = mode;
     g_cal_mode = false;
     if (g_mode == MODE_MANUAL_ANGLE) {
@@ -891,7 +1049,7 @@ bool is_immediate_serial_command(char c) {
         c = (char)(c - 'a' + 'A');
     }
 
-    return c == 'G' || c == 'X' || c == 'Z' || c == 'Y'
+    return c == 'G' || c == 'X' || c == 'E' || c == 'Z' || c == 'Y'
         || c == 'R' || c == 'H' || c == 'O' || c == 'T'
         || c == 'C' || c == '?';
 }
@@ -907,8 +1065,24 @@ void execute_serial_command(char *buf) {
         Serial.println(F("# Driver ENABLED"));
 
     } else if (cmd == 'X') {
+        cancel_staircase(F("driver disable"));
         set_driver_enabled(false);
         Serial.println(F("# Driver DISABLED"));
+
+    } else if (cmd == 'E') {
+        if (g_cal_mode) {
+            Serial.println(F("# ERR: staircase unavailable during calibration telemetry"));
+        } else if (g_mode != MODE_CASCADE) {
+            Serial.println(F("# ERR: staircase requires M2"));
+        } else if (!g_driver_enabled) {
+            Serial.println(F("# ERR: staircase requires driver enabled (send G first)"));
+        } else if (!POSITION_CALIBRATED) {
+            Serial.println(F("# ERR: staircase disabled until POSITION_CALIBRATED is true"));
+        } else if (!g_theta_balance_set) {
+            Serial.println(F("# ERR: staircase requires Z first to set theta balance"));
+        } else {
+            start_staircase(millis());
+        }
 
     } else if (cmd == 'M') {
         int mode = atoi(buf + 1);
@@ -933,6 +1107,7 @@ void execute_serial_command(char *buf) {
         if (!g_as5600_valid) {
             Serial.println(F("# ERR: cannot zero theta, AS5600 invalid"));
         } else {
+            cancel_staircase(F("theta zero"));
             g_theta_balance_deg = g_theta_cal_deg;
             g_theta_balance_set = true;
             g_manual_theta_cmd_rel_deg = 0.0f;
@@ -947,14 +1122,9 @@ void execute_serial_command(char *buf) {
     } else if (cmd == 'S') {
         float sp = atof(buf + 1);
         if (sp >= D_MIN_CM && sp <= D_MAX_CM) {
-            g_setpoint_cm = sp;
-            reset_zero_trim_estimator();
-            reset_dynamic_state();
-            Serial.print(F("# Setpoint -> "));
-            Serial.print(g_setpoint_cm, 2);
-            Serial.println(POSITION_CALIBRATED
-                ? F(" cm")
-                : F(" cm (provisional, position calibration still false)"));
+            cancel_staircase(F("manual setpoint"));
+            apply_setpoint_cm(sp);
+            print_setpoint_announcement();
         } else {
             Serial.print(F("# ERR: setpoint must be in ["));
             Serial.print(D_MIN_CM, 1);
@@ -1032,6 +1202,7 @@ void execute_serial_command(char *buf) {
         Serial.println(g_telemetry_stream ? F("ON") : F("OFF"));
 
     } else if (cmd == 'C') {
+        cancel_staircase(F("calibration toggle"));
         g_cal_mode = !g_cal_mode;
         if (g_cal_mode) {
             g_mode = MODE_TELEMETRY;
@@ -1110,6 +1281,15 @@ void print_config() {
     Serial.print(F("# Setpoint midpoint/trim = "));
     Serial.print(D_SETPOINT_MIDPOINT_CM, 2); Serial.print(F(", "));
     Serial.println(D_SETPOINT_TRIM_DEFAULT_CM, 2);
+    Serial.print(F("# staircase stage/targets = "));
+    Serial.print(STAIRCASE_STAGE_MS / 1000UL);
+    Serial.print(F(" s, "));
+    Serial.print(STAIRCASE_FAR_SETPOINT_CM, 2);
+    Serial.print(F(", "));
+    Serial.print(STAIRCASE_CENTER_SETPOINT_CM, 2);
+    Serial.print(F(", "));
+    Serial.print(STAIRCASE_NEAR_SETPOINT_CM, 2);
+    Serial.println(F(" cm (far, center, near)"));
     Serial.print(F("# Loop period = "));
     Serial.print(LOOP_MS);
     Serial.println(F(" ms"));
@@ -1137,6 +1317,12 @@ void print_config() {
     Serial.print(OUTER_KW_DEFAULT, 4); Serial.print(F(", "));
     Serial.print(OUTER_KI_DEFAULT, 4); Serial.print(F(", "));
     Serial.println(g_outer_sign);
+    Serial.print(F("# positive-x tuning kx_scale/kv_scale/inward_band/inward_extra_kv/recovery_scale = "));
+    Serial.print(OUTER_POS_X_KX_SCALE, 3); Serial.print(F(", "));
+    Serial.print(OUTER_POS_X_KV_SCALE, 3); Serial.print(F(", "));
+    Serial.print(OUTER_POS_X_INWARD_BRAKE_BAND_CM, 2); Serial.print(F(", "));
+    Serial.print(OUTER_POS_X_INWARD_EXTRA_KV, 3); Serial.print(F(", "));
+    Serial.println(OUTER_POS_X_RECOVERY_SCALE, 3);
     Serial.print(F("# full-state gain scale = "));
     Serial.println(g_outer_gain_scale, 3);
     Serial.print(F("# integral output clamp = +/-"));
@@ -1159,8 +1345,11 @@ void print_config() {
     Serial.print(F(" cm / "));
     Serial.print(RECOVERY_ENTER_X_DOT_CM_S, 2);
     Serial.println(F(" cm/s"));
-    Serial.print(F("# recovery exit |x| or inward |x_dot| <=/>= "));
+    Serial.print(F("# recovery exit |x| <= "));
     Serial.print(RECOVERY_EXIT_X_CM, 2);
+    Serial.println(F(" cm"));
+    Serial.print(F("# recovery handoff |x|/|x_dot| <=/>= "));
+    Serial.print(RECOVERY_EXIT_HANDOFF_X_CM, 2);
     Serial.print(F(" cm / "));
     Serial.print(RECOVERY_EXIT_INWARD_X_DOT_CM_S, 2);
     Serial.println(F(" cm/s"));
@@ -1192,7 +1381,7 @@ void print_config() {
     Serial.print(F(" loops (~"));
     Serial.print(1000.0f / ((float)LOOP_MS * (float)g_print_every), 2);
     Serial.println(F(" Hz)"));
-    Serial.println(F("# Commands: G X M0 M1 M2 A<deg> Z S<cm> Y K<float> J<deg> L<deg> N<int> R H O T C ?"));
+    Serial.println(F("# Commands: G X E M0 M1 M2 A<deg> Z S<cm> Y K<float> J<deg> L<deg> N<int> R H O T C ?"));
     Serial.println(F("# ------------------------------------------------"));
 }
 
