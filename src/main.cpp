@@ -111,35 +111,44 @@ static const uint32_t DIR_REVERSE_SETTLE_US      = 1200;
 // changing the stepper timing budget.
 static const uint32_t LOOP_MS                    = 40;
 static const float    DT                         = 0.040f;
-static const uint8_t  PRINT_EVERY                = 25;  // T stream: about one row per second
+static const uint8_t  PRINT_EVERY_DEFAULT        = 5;   // T stream: about 5 rows per second
+static const uint8_t  PRINT_EVERY_MIN            = 1;
+static const uint8_t  PRINT_EVERY_MAX            = 50;
 static const float    THETA_CMD_LIMIT_DEFAULT_DEG = 1.50f;
 
-static const float    OUTER_KX_DEFAULT           = 0.32f;
+static const float    OUTER_KX_DEFAULT           = 0.34f;
 static const float    OUTER_KV_DEFAULT           = 0.10f;
 static const float    OUTER_KT_DEFAULT           = 0.00f;
 static const float    OUTER_KW_DEFAULT           = 0.00f;
-static const float    OUTER_KI_DEFAULT           = 0.028f;
-static const float    OUTER_INTEGRAL_CLAMP_DEG   = 0.18f;
-static const float    OUTER_INTEGRAL_CAPTURE_CM  = 1.60f;
-static const float    OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S = 0.60f;
+static const float    OUTER_KI_DEFAULT           = 0.030f;
+static const float    OUTER_INTEGRAL_CLAMP_DEG   = 0.20f;
+static const float    OUTER_INTEGRAL_CAPTURE_CM  = 2.20f;
+static const float    OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S = 0.50f;
 // These bleed factors are applied on every 40 ms control cycle.
-static const float    OUTER_INTEGRAL_BLEED_OUTSIDE = 0.985f;
+static const float    OUTER_INTEGRAL_BLEED_OUTSIDE = 0.995f;
+static const float    OUTER_INTEGRAL_BLEED_RECOVERY = 0.998f;
 static const float    OUTER_INTEGRAL_BLEED_CENTER  = 0.992f;
-static const float    OUTER_INTEGRAL_BLEED_WRONG_SIGN = 0.85f;
+static const float    OUTER_INTEGRAL_BLEED_WRONG_SIGN = 0.80f;
 static const float    OUTER_CENTER_BAND_CM       = 0.18f;
 static const float    OUTER_CENTER_BAND_X_DOT_CM_S = 0.35f;
 static const float    OUTER_X_DOT_LIMIT_CM_S     = 3.0f;
 static const float    OUTER_THETA_DOT_LIMIT_DEG_S = 4.0f;
 static const float    OUTER_GAIN_SCALE_MIN       = 0.50f;
 static const float    OUTER_GAIN_SCALE_MAX       = 1.50f;
-static const float    RECOVERY_ENTER_X_CM        = 1.60f;
-static const float    RECOVERY_ENTER_X_DOT_CM_S  = 0.45f;
-static const uint8_t  RECOVERY_ENTER_COUNT       = 8;
-static const float    RECOVERY_EXIT_X_CM         = 0.70f;
-static const float    RECOVERY_EXIT_X_DOT_CM_S   = 0.80f;
-static const float    RECOVERY_FLOOR_DEFAULT_DEG = 0.75f;
+static const float    RECOVERY_ENTER_X_CM        = 1.50f;
+static const float    RECOVERY_ENTER_X_DOT_CM_S  = 0.60f;
+static const uint8_t  RECOVERY_ENTER_COUNT       = 6;
+static const float    RECOVERY_EXIT_X_CM         = 0.45f;
+static const float    RECOVERY_EXIT_INWARD_X_DOT_CM_S = 0.90f;
+static const float    RECOVERY_FLOOR_DEFAULT_DEG = 0.95f;
 static const float    RECOVERY_FLOOR_MIN_DEG     = 0.00f;
-static const float    RECOVERY_FLOOR_MAX_DEG     = 1.20f;
+static const float    RECOVERY_FLOOR_MAX_DEG     = 1.25f;
+static const float    RECOVERY_FLOOR_GAIN_DEG_PER_CM = 0.16f;
+static const float    ZERO_TRIM_EST_X_CM         = 0.25f;
+static const float    ZERO_TRIM_EST_X_DOT_CM_S   = 0.25f;
+static const float    ZERO_TRIM_EST_THETA_CMD_DEG = 0.12f;
+static const float    ZERO_TRIM_EST_THETA_DOT_DEG_S = 0.40f;
+static const float    ZERO_TRIM_EST_ALPHA        = 0.05f;
 
 static float g_theta_cmd_limit_deg               = THETA_CMD_LIMIT_DEFAULT_DEG;
 static float g_outer_gain_scale                  = 1.00f;
@@ -170,6 +179,7 @@ static bool           g_driver_enabled      = false;
 static bool           g_cal_mode            = false;
 static bool           g_telemetry_stream    = false;
 static bool           g_print_once          = false;
+static uint8_t        g_print_every         = PRINT_EVERY_DEFAULT;
 static uint32_t       g_last_ms             = 0;
 
 static float          g_distance_window[3]  = {D_SETPOINT_DEFAULT_CM,
@@ -208,6 +218,10 @@ static float          g_outer_xi_cm_s            = 0.0f;
 static bool           g_recovery_active          = false;
 static uint8_t        g_recovery_enter_counter   = 0;
 static float          g_recovery_floor_deg       = RECOVERY_FLOOR_DEFAULT_DEG;
+static float          g_recovery_floor_active_deg = RECOVERY_FLOOR_DEFAULT_DEG;
+static bool           g_zero_trim_est_valid      = false;
+static float          g_zero_trim_est_deg        = 0.0f;
+static uint16_t       g_zero_trim_est_count      = 0;
 static float          g_inner_step_residual      = 0.0f;
 static int32_t        g_step_pos                 = 0;
 static int32_t        g_last_step_delta          = 0;
@@ -230,6 +244,8 @@ int32_t round_to_i32(float value);
 float clamp_theta_rel_command(float theta_rel_deg);
 float compute_full_state_theta_command(bool distance_valid);
 int32_t compute_inner_step_delta(float theta_cmd_rel_deg);
+void reset_zero_trim_estimator(void);
+void update_zero_trim_estimator(bool distance_valid, bool theta_valid);
 void step_relative(int32_t delta_steps);
 void set_driver_enabled(bool enabled);
 void set_mode(ControllerMode mode);
@@ -333,6 +349,8 @@ void loop() {
         step_delta = 0;
     }
 
+    update_zero_trim_estimator(distance_ok, theta_valid);
+
     if (step_delta != 0) {
         step_relative(step_delta);
     }
@@ -340,7 +358,7 @@ void loop() {
 
     static uint8_t print_count = 0;
     bool valid = distance_ok && theta_valid;
-    if (g_print_once || (g_telemetry_stream && (++print_count >= PRINT_EVERY))) {
+    if (g_print_once || (g_telemetry_stream && (++print_count >= g_print_every))) {
         print_count = 0;
         g_print_once = false;
         print_telemetry(valid,
@@ -557,6 +575,7 @@ float compute_full_state_theta_command(bool distance_valid) {
                                         OUTER_THETA_DOT_LIMIT_DEG_S);
     float abs_x_cm = fabs(g_x_cm);
     float abs_x_dot_cm_s = fabs(x_dot_ctrl);
+    bool moving_inward = distance_valid && ((g_x_cm * x_dot_ctrl) < 0.0f);
     bool in_capture_band = abs_x_cm <= OUTER_INTEGRAL_CAPTURE_CM
                         && abs_x_dot_cm_s <= OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S;
     bool in_center_band = abs_x_cm <= OUTER_CENTER_BAND_CM
@@ -568,7 +587,8 @@ float compute_full_state_theta_command(bool distance_valid) {
     if (g_recovery_active) {
         if (!distance_valid
                 || abs_x_cm <= RECOVERY_EXIT_X_CM
-                || abs_x_dot_cm_s >= RECOVERY_EXIT_X_DOT_CM_S) {
+                || (moving_inward
+                    && abs_x_dot_cm_s >= RECOVERY_EXIT_INWARD_X_DOT_CM_S)) {
             g_recovery_active = false;
             g_recovery_enter_counter = 0;
         }
@@ -587,8 +607,10 @@ float compute_full_state_theta_command(bool distance_valid) {
     if (ki > 0.0001f) {
         xi_limit_cm_s = OUTER_INTEGRAL_CLAMP_DEG / ki;
     }
-    if (!distance_valid || g_recovery_active || !in_capture_band) {
+    if (!distance_valid || !in_capture_band) {
         g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_OUTSIDE;
+    } else if (g_recovery_active) {
+        g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_RECOVERY;
     }
     if (g_x_cm != 0.0f && g_outer_xi_cm_s != 0.0f
             && (g_x_cm * g_outer_xi_cm_s) < 0.0f) {
@@ -620,7 +642,7 @@ float compute_full_state_theta_command(bool distance_valid) {
     bool clamped = fabs(fs_cmd_deg) > g_theta_cmd_limit_deg;
     bool command_is_corrective = (g_x_cm != 0.0f)
                               && ((g_x_cm * limited_cmd_deg * (float)g_outer_sign) > 0.0f);
-    bool can_integrate = distance_valid && !g_recovery_active && in_capture_band
+    bool can_integrate = distance_valid && in_capture_band
                       && !(clamped && command_is_corrective);
 
     if (can_integrate) {
@@ -648,17 +670,63 @@ float compute_full_state_theta_command(bool distance_valid) {
                                        g_theta_cmd_limit_deg);
     }
 
+    g_recovery_floor_active_deg = g_recovery_floor_deg;
+    if (g_recovery_active) {
+        float dynamic_floor_deg = g_recovery_floor_deg
+                                + (RECOVERY_FLOOR_GAIN_DEG_PER_CM
+                                   * clamp_float(abs_x_cm - RECOVERY_ENTER_X_CM,
+                                                 0.0f,
+                                                 10.0f));
+        g_recovery_floor_active_deg = clamp_float(dynamic_floor_deg,
+                                                  RECOVERY_FLOOR_MIN_DEG,
+                                                  RECOVERY_FLOOR_MAX_DEG);
+    }
     if (g_recovery_active && g_recovery_floor_deg > 0.0f && g_x_cm != 0.0f) {
         float recovery_cmd_deg = (g_x_cm > 0.0f)
-                               ? -g_recovery_floor_deg
-                               :  g_recovery_floor_deg;
+                               ? -g_recovery_floor_active_deg
+                               :  g_recovery_floor_active_deg;
         recovery_cmd_deg *= (float)(-g_outer_sign);
-        if (fabs(limited_cmd_deg) < g_recovery_floor_deg) {
+        if (fabs(limited_cmd_deg) < g_recovery_floor_active_deg) {
             limited_cmd_deg = recovery_cmd_deg;
         }
     }
 
     return clamp_theta_rel_command(limited_cmd_deg);
+}
+
+void reset_zero_trim_estimator() {
+    g_zero_trim_est_valid = false;
+    g_zero_trim_est_deg = 0.0f;
+    g_zero_trim_est_count = 0;
+}
+
+void update_zero_trim_estimator(bool distance_valid, bool theta_valid) {
+    bool can_sample = (g_mode == MODE_CASCADE)
+                   && g_driver_enabled
+                   && distance_valid
+                   && theta_valid
+                   && g_theta_balance_set
+                   && !g_recovery_active
+                   && (fabs(g_x_cm) <= ZERO_TRIM_EST_X_CM)
+                   && (fabs(g_x_dot_cm_s) <= ZERO_TRIM_EST_X_DOT_CM_S)
+                   && (fabs(g_theta_cmd_rel_deg) <= ZERO_TRIM_EST_THETA_CMD_DEG)
+                   && (fabs(g_theta_dot_deg_s) <= ZERO_TRIM_EST_THETA_DOT_DEG_S);
+    if (!can_sample) {
+        return;
+    }
+
+    if (!g_zero_trim_est_valid) {
+        g_zero_trim_est_valid = true;
+        g_zero_trim_est_deg = g_theta_rel_deg;
+        g_zero_trim_est_count = 1;
+        return;
+    }
+
+    g_zero_trim_est_deg += ZERO_TRIM_EST_ALPHA
+                        * (g_theta_rel_deg - g_zero_trim_est_deg);
+    if (g_zero_trim_est_count < 65535) {
+        g_zero_trim_est_count++;
+    }
 }
 
 int32_t compute_inner_step_delta(float theta_cmd_rel_deg) {
@@ -800,6 +868,7 @@ void reset_dynamic_state() {
     g_outer_xi_cm_s = 0.0f;
     g_recovery_active = false;
     g_recovery_enter_counter = 0;
+    g_recovery_floor_active_deg = g_recovery_floor_deg;
     g_inner_step_residual = 0.0f;
     g_last_step_delta = 0;
 }
@@ -868,6 +937,7 @@ void execute_serial_command(char *buf) {
             g_theta_balance_set = true;
             g_manual_theta_cmd_rel_deg = 0.0f;
             g_theta_cmd_rel_deg = 0.0f;
+            reset_zero_trim_estimator();
             reset_dynamic_state();
             Serial.print(F("# theta_balance_deg -> "));
             Serial.println(g_theta_balance_deg, 5);
@@ -878,6 +948,7 @@ void execute_serial_command(char *buf) {
         float sp = atof(buf + 1);
         if (sp >= D_MIN_CM && sp <= D_MAX_CM) {
             g_setpoint_cm = sp;
+            reset_zero_trim_estimator();
             reset_dynamic_state();
             Serial.print(F("# Setpoint -> "));
             Serial.print(g_setpoint_cm, 2);
@@ -926,6 +997,24 @@ void execute_serial_command(char *buf) {
         Serial.print(F("# theta command limit -> "));
         Serial.print(g_theta_cmd_limit_deg, 3);
         Serial.println(F(" deg rel"));
+
+    } else if (cmd == 'N') {
+        int decimation = atoi(buf + 1);
+        if (decimation >= (int)PRINT_EVERY_MIN
+                && decimation <= (int)PRINT_EVERY_MAX) {
+            g_print_every = (uint8_t)decimation;
+            Serial.print(F("# telemetry decimation -> every "));
+            Serial.print(g_print_every);
+            Serial.print(F(" loops (~"));
+            Serial.print(1000.0f / ((float)LOOP_MS * (float)g_print_every), 2);
+            Serial.println(F(" Hz)"));
+        } else {
+            Serial.print(F("# ERR: telemetry decimation must be in ["));
+            Serial.print(PRINT_EVERY_MIN);
+            Serial.print(F(", "));
+            Serial.print(PRINT_EVERY_MAX);
+            Serial.println(F("] loops"));
+        }
 
     } else if (cmd == 'R') {
         reset_dynamic_state();
@@ -994,6 +1083,7 @@ void print_header() {
                      "x_cm,x_dot_cm_s,theta_cal_deg,theta_rel_deg,"
                      "theta_dot_deg_s,theta_fs_cmd_deg,theta_cmd_rel_deg,"
                      "xi_cm_s,recovery_active,recovery_floor_deg,gain_scale,"
+                     "zero_trim_est_deg,zero_trim_est_count,"
                      "theta_balance_set,outer_sign,driver_enabled,step_delta,"
                      "invalid_count"));
 }
@@ -1057,17 +1147,35 @@ void print_config() {
     Serial.print(F(" cm / "));
     Serial.print(OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S, 2);
     Serial.println(F(" cm/s"));
-    Serial.print(F("# recovery floor = "));
+    Serial.print(F("# recovery floor base/max/gain = "));
     Serial.print(g_recovery_floor_deg, 3);
-    Serial.println(F(" deg"));
+    Serial.print(F(", "));
+    Serial.print(RECOVERY_FLOOR_MAX_DEG, 3);
+    Serial.print(F(", "));
+    Serial.print(RECOVERY_FLOOR_GAIN_DEG_PER_CM, 3);
+    Serial.println(F(" deg, deg, deg/cm"));
     Serial.print(F("# recovery enter |x|/|x_dot| >=/<="));
     Serial.print(RECOVERY_ENTER_X_CM, 2);
     Serial.print(F(" cm / "));
     Serial.print(RECOVERY_ENTER_X_DOT_CM_S, 2);
     Serial.println(F(" cm/s"));
+    Serial.print(F("# recovery exit |x| or inward |x_dot| <=/>= "));
+    Serial.print(RECOVERY_EXIT_X_CM, 2);
+    Serial.print(F(" cm / "));
+    Serial.print(RECOVERY_EXIT_INWARD_X_DOT_CM_S, 2);
+    Serial.println(F(" cm/s"));
     Serial.print(F("# theta command relative limit = "));
     Serial.print(g_theta_cmd_limit_deg, 3);
     Serial.println(F(" deg"));
+    Serial.print(F("# zero-trim estimate = "));
+    if (g_zero_trim_est_valid) {
+        Serial.print(g_zero_trim_est_deg, 4);
+        Serial.print(F(" deg from "));
+        Serial.print(g_zero_trim_est_count);
+        Serial.println(F(" samples"));
+    } else {
+        Serial.println(F("N/A"));
+    }
     Serial.print(F("# inner Kp/Kd/steps_per_beam_deg/step_sign = "));
     Serial.print(INNER_KP_THETA, 3); Serial.print(F(", "));
     Serial.print(INNER_KD_THETA, 3); Serial.print(F(", "));
@@ -1079,7 +1187,12 @@ void print_config() {
     Serial.println(g_driver_enabled ? F("ENABLED") : F("DISABLED"));
     Serial.print(F("# telemetry stream = "));
     Serial.println(g_telemetry_stream ? F("ON") : F("OFF"));
-    Serial.println(F("# Commands: G X M0 M1 M2 A<deg> Z S<cm> Y K<float> J<deg> L<deg> R H O T C ?"));
+    Serial.print(F("# telemetry decimation = every "));
+    Serial.print(g_print_every);
+    Serial.print(F(" loops (~"));
+    Serial.print(1000.0f / ((float)LOOP_MS * (float)g_print_every), 2);
+    Serial.println(F(" Hz)"));
+    Serial.println(F("# Commands: G X M0 M1 M2 A<deg> Z S<cm> Y K<float> J<deg> L<deg> N<int> R H O T C ?"));
     Serial.println(F("# ------------------------------------------------"));
 }
 
@@ -1104,8 +1217,10 @@ void print_telemetry(bool valid,
     Serial.print(g_theta_cmd_rel_deg, 4); Serial.print(',');
     Serial.print(g_outer_xi_cm_s, 4); Serial.print(',');
     Serial.print(g_recovery_active ? 1 : 0); Serial.print(',');
-    Serial.print(g_recovery_floor_deg, 3); Serial.print(',');
+    Serial.print(g_recovery_floor_active_deg, 3); Serial.print(',');
     Serial.print(g_outer_gain_scale, 3); Serial.print(',');
+    Serial.print(g_zero_trim_est_valid ? g_zero_trim_est_deg : 0.0f, 4); Serial.print(',');
+    Serial.print(g_zero_trim_est_count); Serial.print(',');
     Serial.print(g_theta_balance_set ? 1 : 0); Serial.print(',');
     Serial.print(g_outer_sign); Serial.print(',');
     Serial.print(g_driver_enabled ? 1 : 0); Serial.print(',');
