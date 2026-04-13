@@ -1,0 +1,11 @@
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\linewidth}{@{}l l r r r r r r r r r@{}}
+\toprule
+Step & Transition & $\Delta$ [cm] & Valid & Peak $|e|$ & RMSE & MAE & SSE & Ov. & Wrong-way & Rise / settle [s] \\
+\midrule
+Far step & 8.53 -> 12.16 & 3.63 & 59/100 & 3.398 & 1.139 & 0.944 & -0.711 & 0.000 & 0.000 & N/A / N/A \\
+Center return & 12.16 -> 8.53 & -3.63 & 98/100 & 3.365 & 1.552 & 1.428 & 1.310 & 1.505 & 0.280 & 0.798 / N/A \\
+Near step & 8.53 -> 4.90 & -3.63 & 119/119 & 3.712 & 1.692 & 1.257 & 0.049 & 0.123 & 0.000 & 0.600 / 22.196 \\
+\bottomrule
+\end{tabularx}

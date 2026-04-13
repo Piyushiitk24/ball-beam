@@ -1,0 +1,146 @@
+% !TEX root = ../main.tex
+\chapter{Linearization and Numerical Specialization}
+
+\section{Operating Point}
+
+The control design operating point is the horizontal beam equilibrium with the ball at
+rest at the center of the usable sensing window:
+
+\begin{equation}
+  r = r_0 = \SI{0.1256}{m}, \qquad
+  \theta = 0, \qquad
+  \dot{r} = 0, \qquad
+  \dot{\theta} = 0
+\end{equation}
+
+At this operating point the actuator must balance gravity with
+
+\begin{equation}
+  \tau_0 = (mr_0 + M_bL_{\text{com}})g
+\end{equation}
+
+In the implemented cascaded controller, this equilibrium torque is handled implicitly
+through the beam-angle servo and balance-zero procedure.
+
+\section{Perturbation Variables}
+
+Define small deviations from equilibrium by
+
+\begin{align}
+  r &= r_0 + x \\
+  \theta &= \delta \\
+  \dot{r} &= \dot{x} \\
+  \dot{\theta} &= \dot{\delta}
+\end{align}
+
+Substituting these expressions into the nonlinear equations and neglecting second-order
+products gives the linearized model.
+
+\section{Linearized Ball Dynamics}
+
+Starting from \eqref{eq:eom_r}:
+
+\begin{equation}
+  \frac{5}{3}m\ddot{x} + b_x\dot{x} + mg\delta = 0
+\end{equation}
+
+Dividing through by the effective rolling mass $m_e = \tfrac{5}{3}m$ gives
+
+\begin{equation}
+  \ddot{x} + \beta \dot{x} = -\alpha g \delta
+  \label{eq:linear_ball}
+\end{equation}
+
+with
+
+\begin{align}
+  \alpha &= \frac{m}{m_e} = \frac{3}{5} = 0.6 \\
+  \beta &= \frac{b_x}{m_e} = \frac{0.0125}{0.0046667} = \SI{2.6786}{s^{-1}}
+\end{align}
+
+Numerically, the ball-position plant becomes
+
+\begin{equation}
+  \ddot{x} + 2.6786\dot{x} = -5.886\,\delta
+\end{equation}
+
+or in transfer-function form,
+
+\begin{equation}
+  \frac{X(s)}{\Theta(s)} =
+  \frac{-5.886}{s^2 + 2.6786s}
+  = \frac{-5.886}{s(s + 2.6786)}
+\end{equation}
+
+\section{Linearized Beam Dynamics}
+
+Linearizing \eqref{eq:eom_theta} gives
+
+\begin{equation}
+  (J + mr_0^2)\ddot{\delta}
+  + b_{\theta}\dot{\delta}
+  + (mr_0 + M_bL_{\text{com}})g\delta
+  = \tau - \tau_0
+  \label{eq:linear_beam}
+\end{equation}
+
+Substituting the evaluated parameters yields
+
+\begin{align}
+  J_{\text{total}}(r_0)
+    &= J + mr_0^2
+     = \SI{8.157e-4}{kg.m^2} \\
+  (mr_0 + M_bL_{\text{com}})g
+    &= \SI{0.04804}{N.m/rad}
+\end{align}
+
+Ignoring damping for an estimate, the beam mode has natural frequency
+
+\begin{equation}
+  \omega_{\text{beam}}
+  = \sqrt{\frac{0.04804}{8.157\times 10^{-4}}}
+  = \SI{7.67}{rad/s}
+  \approx \SI{1.22}{Hz}
+\end{equation}
+
+\section{Specialized Parameters}
+
+Table~\ref{tab:specialized_parameters} collects the key values used for control
+interpretation.
+
+\begin{table}[tbp]
+  \centering
+  \small
+  \caption{Numerically specialized parameters around the nominal operating point.}
+  \label{tab:specialized_parameters}
+  \begin{tabularx}{\linewidth}{@{}l c X@{}}
+    \toprule
+    Symbol / quantity & Value & Meaning \\
+    \midrule
+    $m_e$ & \SI{0.004667}{kg} & Effective rolling mass of the hollow ball \\
+    $\alpha$ & 0.6 & Ball-to-effective-mass ratio \\
+    $\beta$ & \SI{2.6786}{s^{-1}} & Linearized viscous coefficient in the ball equation \\
+    $\alpha g$ & \SI{5.886}{m/s^2} & Beam-angle to ball-acceleration gain \\
+    $J_{\text{total}}(r_0)$ & \SI{8.157e-4}{kg.m^2} & Total beam-side rotational inertia at center position \\
+    $(mr_0 + M_bL_{\text{com}})g$ & \SI{0.04804}{N.m/rad} & Linearized gravitational restoring torque coefficient \\
+    $\omega_{\text{beam}}$ & \SI{7.67}{rad/s} & Approximate beam natural frequency without extra actuator dynamics \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Implication for Controller Structure}
+
+The linearized ball equation has an integrator and a stable real pole, while the beam
+subsystem is comparatively faster and directly actuated. That separation motivates the
+implemented cascaded structure:
+
+\begin{itemize}
+  \item an inner loop regulates beam angle using the AS5600 measurement and stepper
+  actuation, and
+  \item an outer loop commands beam angle from ball-position error, velocity, and a
+  constrained integral term.
+\end{itemize}
+
+The actual firmware is more detailed than the ideal linear model. It retains
+quantization, deadband, validity gating, recovery logic, and empirical limits, which
+are described in the next chapter.

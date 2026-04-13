@@ -1,0 +1,48 @@
+% !TEX TS-program = latexmk
+\documentclass[11pt,a4paper]{report}
+
+\input{preamble}
+\IfFileExists{metadata.tex}{\input{metadata.tex}}{}
+\IfFileExists{tables/generated_macros.tex}{\input{tables/generated_macros.tex}}{}
+
+\begin{document}
+
+\pagenumbering{gobble}
+\begin{titlepage}
+    \centering
+    \vspace*{2.5cm}
+    {\Huge\bfseries \ReportTitle\par}
+    \vspace{0.6cm}
+    {\Large \ReportSubtitle\par}
+    \vspace{1.8cm}
+    {\large \ReportAuthor\par}
+    \vspace{0.4cm}
+    {\large \ReportInstitution\par}
+    \vfill
+    {\large \ReportDate\par}
+    \vspace*{1cm}
+\end{titlepage}
+
+\pagenumbering{roman}
+\setcounter{page}{1}
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+\clearpage
+
+\pagenumbering{arabic}
+
+\input{chapters/01_introduction}
+\input{chapters/02_system_description}
+\input{chapters/03_modeling}
+\input{chapters/04_linearization}
+\input{chapters/05_control_implementation}
+\input{chapters/06_calibration}
+\input{chapters/07_results}
+\input{chapters/08_conclusion}
+
+\ReportPrintBibliography
+
+\end{document}

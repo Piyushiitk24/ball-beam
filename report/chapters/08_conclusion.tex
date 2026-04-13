@@ -1,0 +1,25 @@
+% !TEX root = ../main.tex
+\chapter{Conclusion}
+
+This report system turns the repository into a self-contained ball and beam experiment
+record. It packages the mathematical model, runtime controller description, calibration
+analysis, telemetry plots, generated tables, and local build tooling into a single
+maintainable LaTeX tree under \path{report/}.
+
+From the experiment itself, the main conclusions are:
+
+\begin{itemize}
+  \item the nonlinear model and linearized operating-point analysis remain consistent
+  with the staged cascaded controller architecture,
+  \item the combined forward/reverse calibration data expose measurable hysteresis, so
+  offline calibration analysis should remain distinct from the simpler online affine
+  mapping used by the firmware, and
+  \item the April 11 staircase run demonstrates functional closed-loop transport across
+  the usable sensing window, but the response quality is still limited by sensor
+  invalidity and residual steady-state error during larger moves.
+\end{itemize}
+
+Immediate next steps are to collect cleaner far-side telemetry, improve near/far
+distance validity robustness, and rerun the staircase experiment after those sensing
+improvements so the same report pipeline can produce a higher-confidence final results
+chapter.

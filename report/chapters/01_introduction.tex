@@ -1,0 +1,51 @@
+% !TEX root = ../main.tex
+\chapter{Introduction}
+
+This document provides a standalone engineering report system for the ball and beam
+experiment contained in this repository. The report combines the canonical modeling
+record in \path{modeling.md}, calibration evidence from the April 7, 2026 beam-angle
+campaign, and the staircase telemetry run stored in
+\path{telemetry_logs/20260411_142117/telemetry.csv}.
+
+The report structure is intentionally self-contained. All LaTeX sources, bibliography
+files, generated figures, generated tables, and build outputs live inside
+\path{report/}. The analysis pipeline reads the raw CSV logs directly and exports
+report-ready plots and tabular summaries without depending on any other repository.
+
+\section{Purpose}
+
+The main goals are:
+
+\begin{itemize}
+  \item capture the first-principles ball and beam model used for the project,
+  \item document the implemented sensing, calibration, and cascaded controller in
+  the firmware,
+  \item analyze the available calibration and staircase telemetry logs directly from
+  raw CSV data, and
+  \item provide a maintainable report build flow that works from the terminal and in
+  VS Code with LaTeX Workshop.
+\end{itemize}
+
+\section{Data Sources}
+
+The report uses the following repository-local sources as its primary experiment record:
+
+\begin{itemize}
+  \item \path{modeling.md} for the mathematical derivation, sign conventions, and
+  implementation record,
+  \item \path{src/main.cpp} for the shipped controller constants and mode logic,
+  \item \path{telemetry_logs/20260411_142117/telemetry.csv} for the closed-loop
+  staircase experiment, and
+  \item \path{calibration_logs/combined_20260407_forward_reverse/combined_cleaned_calibration.csv}
+  for beam-angle calibration hysteresis characterization.
+\end{itemize}
+
+\section{Report Roadmap}
+
+Chapter~2 summarizes the physical apparatus, coordinates, and measured parameters.
+Chapter~3 reproduces the nonlinear derivation from the canonical model record.
+Chapter~4 specializes the model around the horizontal operating point for control
+design. Chapter~5 documents the firmware implementation actually used in the hardware
+run. Chapter~6 analyzes the beam-angle calibration data. Chapter~7 discusses the April
+11 telemetry run using plots and performance metrics generated directly from the raw
+CSV logs. Chapter~8 closes with key findings and immediate next steps.

@@ -1,0 +1,121 @@
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{siunitx}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\newif\ifReportBiblatexLoaded
+\IfFileExists{biblatex.sty}{%
+  \ReportBiblatexLoadedtrue
+  \usepackage[backend=biber,style=ieee,sorting=none]{biblatex}
+  \addbibresource{bib/references.bib}
+}{%
+  \ReportBiblatexLoadedfalse
+}
+
+\graphicspath{{figures/}}
+
+\captionsetup{font=small,labelfont=bf}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\numberwithin{equation}{chapter}
+
+\sisetup{
+  detect-all,
+  per-mode=symbol,
+  round-mode=places,
+  round-precision=3
+}
+
+\providecommand{\ReportTitle}{Ball and Beam Experiment Report}
+\providecommand{\ReportSubtitle}{Self-contained multi-file LaTeX engineering report}
+\providecommand{\ReportAuthor}{Author Name}
+\providecommand{\ReportInstitution}{Institution / Lab}
+\providecommand{\ReportDate}{\today}
+
+\providecommand{\TelemetryRowCount}{0}
+\providecommand{\TelemetryClosedLoopRowCount}{0}
+\providecommand{\TelemetryDurationSeconds}{0.0}
+\providecommand{\TelemetryInvalidRowCount}{0}
+\providecommand{\TelemetryRecoveryRowCount}{0}
+\providecommand{\TelemetryFarValidCount}{0}
+\providecommand{\TelemetryFarTotalCount}{0}
+\providecommand{\TelemetryCenterValidCount}{0}
+\providecommand{\TelemetryCenterTotalCount}{0}
+\providecommand{\TelemetryNearValidCount}{0}
+\providecommand{\TelemetryNearTotalCount}{0}
+\providecommand{\CalibrationPointCount}{0}
+\providecommand{\CalibrationMeanHysteresisDeg}{0.0}
+\providecommand{\CalibrationMaxHysteresisDeg}{0.0}
+\providecommand{\CalibrationRmsHysteresisDeg}{0.0}
+\providecommand{\TelemetryMaxAbsErrorCm}{0.0}
+\providecommand{\TelemetryMaxBeamAngleDeg}{0.0}
+\providecommand{\TelemetryMaxCommandDeg}{0.0}
+
+\newcommand{\MissingAssetPlaceholder}[2][0.82\linewidth]{%
+  \begin{center}
+    \setlength{\fboxsep}{10pt}%
+    \fbox{%
+      \begin{minipage}{#1}
+        \centering
+        \textbf{Placeholder asset}\\[0.5em]
+        #2
+      \end{minipage}%
+    }%
+  \end{center}
+}
+
+\newcommand{\ReportFigure}[4][]{%
+  \begin{figure}[tbp]
+    \centering
+    \IfFileExists{#2}{%
+      \includegraphics[#1]{#2}%
+    }{%
+      \MissingAssetPlaceholder{Missing figure file \texttt{\detokenize{#2}}.}%
+    }%
+    \caption{#3}
+    \label{#4}
+  \end{figure}
+}
+
+\newcommand{\ReportTableFromFile}[3]{%
+  \begin{table}[tbp]
+    \centering
+    \caption{#1}
+    \label{#3}
+    \IfFileExists{#2}{%
+      \input{#2}%
+    }{%
+      \MissingAssetPlaceholder[0.70\linewidth]{Missing table file \texttt{\detokenize{#2}}.}%
+    }%
+  \end{table}
+}
+
+\newcommand{\ReportPrintBibliography}{%
+  \clearpage
+  \chapter*{References}
+  \addcontentsline{toc}{chapter}{References}
+  \ifReportBiblatexLoaded
+    \IfFileExists{build/main.bbl}{%
+    \nocite{*}%
+    \printbibliography[heading=none]%
+    }{%
+      \begin{thebibliography}{99}
+        \input{bib/manual_bibliography.tex}
+      \end{thebibliography}
+    }%
+  \else
+    \begin{thebibliography}{99}
+      \input{bib/manual_bibliography.tex}
+    \end{thebibliography}
+  \fi
+}

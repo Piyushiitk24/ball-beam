@@ -1,0 +1,67 @@
+% !TEX root = ../main.tex
+\chapter{Beam-Angle Calibration Analysis}
+
+This chapter analyzes the combined forward and reverse calibration data stored in
+\path{calibration_logs/combined_20260407_forward_reverse/combined_cleaned_calibration.csv}.
+Those data are used here as the direct source for beam-angle calibration figures and
+hysteresis statistics.
+
+\section{Scope of the Calibration Data}
+
+The combined CSV merges a forward sweep and an interpolated reverse sweep onto a common
+AS5600 angle grid. Its role in this report is to show the measured static beam-angle
+relationship and the amount of direction-dependent hysteresis. It is not the runtime
+controller source-of-truth by itself.
+
+The implemented controller still uses the same-session affine calibration documented in
+\path{modeling.md} and \path{src/main.cpp}:
+
+\begin{equation}
+  \theta_{\text{cal,deg}} = 0.07666806 \cdot \theta_{\text{AS5600,deg}} - 23.28443907
+\end{equation}
+
+That distinction matters because the combined forward/reverse dataset shows larger
+direction-dependent offset than the same-session calibration chosen for closed-loop
+control.
+
+\section{Calibration Summary}
+
+The combined CSV contains \CalibrationPointCount{} grid points. The observed reverse
+minus forward hysteresis is summarized by:
+
+\begin{itemize}
+  \item mean hysteresis: \CalibrationMeanHysteresisDeg{} degrees,
+  \item RMS hysteresis: \CalibrationRmsHysteresisDeg{} degrees, and
+  \item max hysteresis: \CalibrationMaxHysteresisDeg{} degrees.
+\end{itemize}
+
+\ReportTableFromFile
+  {Summary statistics generated directly from the combined calibration CSV.}
+  {tables/calibration_summary.tex}
+  {tab:calibration_summary}
+
+\section{Forward/Reverse Curve}
+
+\ReportFigure[width=0.95\linewidth]
+  {figures/calibration_curve.pdf}
+  {Forward and reverse beam-angle calibration curves generated directly from the
+  combined calibration CSV. The overlaid affine line is the runtime mapping used in the
+  controller.}
+  {fig:calibration_curve}
+
+Figure~\ref{fig:calibration_curve} shows that the relationship is approximately affine
+over the operating window but not perfectly single-valued when travel direction is
+considered. The combined dataset therefore serves best as an offline characterization
+tool.
+
+\section{Hysteresis Plot}
+
+\ReportFigure[width=0.95\linewidth]
+  {figures/calibration_hysteresis.pdf}
+  {Direction-dependent hysteresis, plotted as reverse minus forward beam angle versus
+  unwrapped AS5600 angle.}
+  {fig:calibration_hysteresis}
+
+The hysteresis remains positive across the combined dataset, with a magnitude large
+enough to justify separating the thesis-facing static characterization from the simpler
+runtime affine map used for controller execution.

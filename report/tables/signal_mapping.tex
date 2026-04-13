@@ -1,0 +1,17 @@
+\small
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+Telemetry column & Mapped quantity & Note \\
+\midrule
+t\_ms & Elapsed experiment time & Converted to seconds from the first logged sample. \\
+setpoint\_cm & Reference ball position & Controller target in Sharp distance coordinates. \\
+d\_filt\_cm & Measured ball position & Filtered distance used for control and plotting. \\
+x\_cm & Tracking error & Defined in firmware as d\_filt\_cm - setpoint\_cm. \\
+x\_dot\_cm\_s & Ball velocity estimate & Filtered derivative used by the outer loop. \\
+theta\_rel\_deg & Measured beam angle & Runtime beam-angle coordinate after balance zeroing. \\
+theta\_dot\_deg\_s & Beam-angle rate & Filtered derivative of theta\_rel\_deg. \\
+theta\_cmd\_rel\_deg & Final control input & Relative beam-angle command sent to the inner loop. \\
+valid & Measurement validity & Position-derived metrics only use rows where valid = 1. \\
+mode and driver\_enabled & Closed-loop filter & Analysis keeps rows with mode = 2 and driver\_enabled = 1. \\
+\bottomrule
+\end{tabularx}

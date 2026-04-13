@@ -1,0 +1,195 @@
+% !TEX root = ../main.tex
+\chapter{Nonlinear Modeling and Derivation}
+
+\section{Kinematics}
+
+With the pivot taken as the origin of an inertial frame, the ball center coordinates are
+
+\begin{align}
+  x_I &= r \cos \theta \\
+  y_I &= r \sin \theta
+\end{align}
+
+where $r$ is the distance of the ball along the beam and $\theta$ is the beam angle from
+horizontal.
+
+Differentiating gives the inertial velocity components:
+
+\begin{align}
+  \dot{x}_I &= \dot{r}\cos\theta - r\dot{\theta}\sin\theta \\
+  \dot{y}_I &= \dot{r}\sin\theta + r\dot{\theta}\cos\theta
+\end{align}
+
+The squared speed simplifies to the standard polar-coordinate result:
+
+\begin{align}
+  v^2
+  &= \dot{x}_I^2 + \dot{y}_I^2 \\
+  &= \left(\dot{r}\cos\theta - r\dot{\theta}\sin\theta\right)^2
+   + \left(\dot{r}\sin\theta + r\dot{\theta}\cos\theta\right)^2 \\
+  &= \dot{r}^2 + r^2 \dot{\theta}^2
+\end{align}
+
+The ball is modeled as rolling without slip along the beam, so its spin rate is
+
+\begin{equation}
+  \omega_{\text{ball}} = \frac{\dot{r}}{R}
+\end{equation}
+
+This removes the ball spin as an independent degree of freedom.
+
+\section{Energy Terms}
+
+\subsection{Ball Translational and Rotational Kinetic Energy}
+
+The translational kinetic energy is
+
+\begin{equation}
+  T_{\text{trans}} = \frac{1}{2} m \left(\dot{r}^2 + r^2\dot{\theta}^2\right)
+\end{equation}
+
+Using the thin-shell inertia $I = \tfrac{2}{3}mR^2$ and the rolling constraint, the
+rotational kinetic energy becomes
+
+\begin{align}
+  T_{\text{rot}}
+  &= \frac{1}{2} I \omega_{\text{ball}}^2 \\
+  &= \frac{1}{2}\left(\frac{2}{3}mR^2\right)\left(\frac{\dot{r}}{R}\right)^2 \\
+  &= \frac{1}{3} m \dot{r}^2
+\end{align}
+
+\subsection{Beam Kinetic Energy}
+
+The beam assembly rotates as a rigid body about the pivot:
+
+\begin{equation}
+  T_{\text{beam}} = \frac{1}{2} J \dot{\theta}^2
+\end{equation}
+
+\subsection{Total Kinetic Energy}
+
+Summing all contributions gives
+
+\begin{align}
+  T
+  &= T_{\text{trans}} + T_{\text{rot}} + T_{\text{beam}} \\
+  &= \frac{5}{6}m\dot{r}^2 + \frac{1}{2}\left(mr^2 + J\right)\dot{\theta}^2
+\end{align}
+
+The $\tfrac{5}{6}$ factor on $\dot{r}^2$ is the characteristic effective-mass term of
+the ball and beam plant.
+
+\subsection{Potential Energy}
+
+Taking the pivot height as the reference, the ball and beam potential energies are
+
+\begin{align}
+  V_{\text{ball}} &= mgr\sin\theta \\
+  V_{\text{beam}} &= M_b g L_{\text{com}} \sin\theta
+\end{align}
+
+so the total potential energy is
+
+\begin{equation}
+  V = (mr + M_bL_{\text{com}}) g \sin\theta
+\end{equation}
+
+\subsection{Lagrangian}
+
+The Lagrangian is therefore
+
+\begin{equation}
+  \mathcal{L}
+  = \frac{5}{6}m\dot{r}^2
+  + \frac{1}{2}\left(mr^2 + J\right)\dot{\theta}^2
+  - (mr + M_bL_{\text{com}}) g \sin\theta
+\end{equation}
+
+\section{Euler--Lagrange Equations}
+
+The generalized forces include viscous rolling damping and actuator torque:
+
+\begin{align}
+  Q_r &= -b_x \dot{r} \\
+  Q_{\theta} &= \tau - b_{\theta}\dot{\theta}
+\end{align}
+
+\subsection{Ball Equation}
+
+For the $r$ coordinate,
+
+\begin{align}
+  \frac{\partial \mathcal{L}}{\partial \dot{r}} &= \frac{5}{3}m\dot{r} \\
+  \frac{d}{dt}\left(\frac{\partial \mathcal{L}}{\partial \dot{r}}\right) &= \frac{5}{3}m\ddot{r} \\
+  \frac{\partial \mathcal{L}}{\partial r} &= mr\dot{\theta}^2 - mg\sin\theta
+\end{align}
+
+Applying the Euler--Lagrange equation yields
+
+\begin{equation}
+  \frac{5}{3}m\ddot{r} + b_x\dot{r} - mr\dot{\theta}^2 + mg\sin\theta = 0
+  \label{eq:eom_r}
+\end{equation}
+
+The terms represent the effective rolling inertia, viscous damping, centrifugal
+coupling from beam rotation, and gravitational acceleration along the beam.
+
+\subsection{Beam Equation}
+
+For the $\theta$ coordinate,
+
+\begin{align}
+  \frac{\partial \mathcal{L}}{\partial \dot{\theta}} &= (mr^2 + J)\dot{\theta} \\
+  \frac{d}{dt}\left(\frac{\partial \mathcal{L}}{\partial \dot{\theta}}\right)
+    &= (mr^2 + J)\ddot{\theta} + 2mr\dot{r}\dot{\theta} \\
+  \frac{\partial \mathcal{L}}{\partial \theta}
+    &= -(mr + M_bL_{\text{com}})g\cos\theta
+\end{align}
+
+Hence
+
+\begin{equation}
+  (J + mr^2)\ddot{\theta}
+  + 2mr\dot{r}\dot{\theta}
+  + b_{\theta}\dot{\theta}
+  + (mr + M_bL_{\text{com}})g\cos\theta
+  = \tau
+  \label{eq:eom_theta}
+\end{equation}
+
+The beam equation captures inertia variation with ball position, Coriolis coupling,
+pivot damping, gravity, and motor torque.
+
+\section{Explicit Nonlinear State Model}
+
+Defining the effective rolling mass
+
+\begin{equation}
+  m_e = \frac{5}{3}m = \SI{0.004667}{kg}
+\end{equation}
+
+the ball equation can be written explicitly as
+
+\begin{equation}
+  \ddot{r}
+  = \frac{mr\dot{\theta}^2}{m_e}
+  - \frac{mg}{m_e}\sin\theta
+  - \frac{b_x}{m_e}\dot{r}
+\end{equation}
+
+and the beam equation becomes
+
+\begin{equation}
+  \ddot{\theta}
+  =
+  \frac{
+    \tau
+    - 2mr\dot{r}\dot{\theta}
+    - b_{\theta}\dot{\theta}
+    - (mr + M_bL_{\text{com}})g\cos\theta
+  }{J + mr^2}
+\end{equation}
+
+Together, these equations form the coupled nonlinear plant with state
+$[r,\dot{r},\theta,\dot{\theta}]^{\mathsf{T}}$. They are the source model used for the
+linearized design discussion and for interpreting the runtime controller structure.

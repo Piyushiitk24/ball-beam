@@ -1,0 +1,123 @@
+% !TEX root = ../main.tex
+\chapter{Experiment Results}
+
+\section{Telemetry Mapping and Analysis Assumptions}
+
+The results in this chapter come from
+\path{telemetry_logs/20260411_142117/telemetry.csv}. The analysis script uses the
+logged columns \verb|t_ms|, \verb|setpoint_cm|, \verb|d_filt_cm|, \verb|x_cm|,
+\verb|x_dot_cm_s|, \verb|theta_rel_deg|, \verb|theta_dot_deg_s|,
+\verb|theta_cmd_rel_deg|, \verb|mode|, \verb|valid|, \verb|driver_enabled|,
+\verb|recovery_active|, \verb|step_pos|, and \verb|step_delta|.
+
+Only rows with \verb|mode == 2| and \verb|driver_enabled == 1| are treated as
+closed-loop experiment data. Position-derived metrics also honor the logged
+\verb|valid| flag because the far-step segment contains intermittent invalid Sharp
+samples.
+
+For figure readability, the position and error plots use a display-only five-sample
+centered rolling mean of the logged position signal, and short interior invalid gaps
+are bridged only in the drawn trace. The summary tables and reported metrics still use
+the raw valid samples from the CSV.
+
+\ReportTableFromFile
+  {Signal mapping assumptions used by the analysis pipeline.}
+  {tables/signal_mapping.tex}
+  {tab:signal_mapping}
+
+\section{Run Summary}
+
+The full log contains \TelemetryRowCount{} rows spanning \TelemetryDurationSeconds{}
+seconds, with \TelemetryClosedLoopRowCount{} rows in closed-loop cascade mode. The run
+contains \TelemetryInvalidRowCount{} invalid sensor rows and \TelemetryRecoveryRowCount{}
+rows with recovery active. The maximum observed absolute tracking error was
+\TelemetryMaxAbsErrorCm{} cm, while the maximum measured beam-angle magnitude and
+command magnitude were \TelemetryMaxBeamAngleDeg{} deg and \TelemetryMaxCommandDeg{}
+deg respectively.
+
+\ReportTableFromFile
+  {Run-level summary generated from the telemetry CSV.}
+  {tables/telemetry_run_summary.tex}
+  {tab:telemetry_run_summary}
+
+\section{Overview Plot}
+
+\ReportFigure[width=\linewidth]
+  {figures/telemetry_overview.pdf}
+  {Phase-by-phase overview of the staircase experiment. Each panel uses a local time
+  axis and its own vertical scale so the hold portions remain readable. The bold red
+  curve is a display-smoothed version of the valid measured signal, while the faint raw
+  trace shows the underlying sensor fluctuation.}
+  {fig:telemetry_overview}
+
+The staircase sequence consists of an initial center hold, a far-side step, a return to
+center, and a near-side step. The local time axes make the settled portions legible
+without altering the underlying data. Validity losses are concentrated in the far-side
+segment, which is why the generated summary tables separate valid sample counts from
+total row counts.
+
+\section{Ball-Position Tracking}
+
+\ReportFigure[width=\linewidth]
+  {figures/telemetry_position_tracking.pdf}
+  {Reference tracking by commanded transition. The left column shows the first
+  \SI{8}{s} after each setpoint change, while the right column zooms into the late hold
+  portion of the same segment.}
+  {fig:telemetry_position_tracking}
+
+\ReportFigure[width=\linewidth]
+  {figures/telemetry_tracking_error.pdf}
+  {Late-hold tracking error
+  $x_{\text{cm}} = d_{\text{filt,cm}} - d_{\text{setpoint,cm}}$ for each commanded
+  transition. Dashed lines show the default settling band used in the summary metrics,
+  while the bold curve uses the same display-only smoothing as the position plots.}
+  {fig:telemetry_tracking_error}
+
+The split transition-and-hold layout makes the experiment easier to read than a single
+long time axis. In particular, the far-side and near-side moves show usable late-hold
+tracking once the initial transport transient is separated from the rest of the phase.
+The center-return segment still carries the largest residual offset in the available
+window, so the figure presentation is clearer but not artificially optimistic.
+
+\section{Beam Motion and Control Effort}
+
+\ReportFigure[width=\linewidth]
+  {figures/telemetry_beam_angle.pdf}
+  {Measured beam angle versus time during the staircase experiment.}
+  {fig:telemetry_beam_angle}
+
+\ReportFigure[width=\linewidth]
+  {figures/telemetry_control_input.pdf}
+  {Final relative beam-angle command sent to the inner loop.}
+  {fig:telemetry_control_input}
+
+\ReportFigure[width=\linewidth]
+  {figures/telemetry_velocity_rate.pdf}
+  {Ball velocity and beam-angle rate estimates derived from the logged telemetry.}
+  {fig:telemetry_velocity_rate}
+
+The logged beam-angle command remains well inside the configured \SI{2.0}{deg} command
+cap, and the CSV shows \verb|theta_cmd_sat = 0| for all rows. Recovery activates only
+briefly during large transitions, which is consistent with the firmware design intent:
+use recovery as a minimum-corrective-angle floor rather than as the dominant transport
+mechanism.
+
+\section{Performance Metrics}
+
+\ReportTableFromFile
+  {Per-step tracking metrics computed from valid closed-loop samples. Settling uses the
+  default band $\max(\SI{0.2}{cm}, 5\%$ of commanded step size$)$. Unsupported metrics
+  remain \texttt{N/A}.}
+  {tables/telemetry_step_metrics.tex}
+  {tab:telemetry_step_metrics}
+
+The step metrics confirm three main points:
+
+\begin{itemize}
+  \item the far-side transition is limited by invalid distance samples and does not
+  reach a clean settled condition in the available segment length,
+  \item the center-return and near-side transitions achieve finite rise times but still
+  show non-negligible residual error over the final valid window, and
+  \item the recorded experiment is more useful as a realistic tuning baseline than as a
+  final high-performance demonstration.
+\end{itemize}
