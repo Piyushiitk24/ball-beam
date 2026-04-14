@@ -938,14 +938,14 @@ x_dot_ctrl     = clamp(x_dot_cm_s,      -4.50, 4.50)
 theta_dot_ctrl = clamp(theta_dot_deg_s, -4.00, 4.00)
 ```
 
-With the default April 11, 2026 firmware settings,
+With the latest April 13, 2026 firmware settings,
 
 ```text
-kx = 0.28 * gain_scale
-kv = 0.20 * gain_scale
+kx = 0.31 * gain_scale
+kv = 0.17 * gain_scale
 kt = 0.00 * gain_scale
 kw = 0.00 * gain_scale
-ki = 0.020 * gain_scale
+ki = 0.030 * gain_scale
 
 gain_scale   = 1.0 by default
 g_outer_sign = -1 by default
@@ -954,20 +954,44 @@ g_outer_sign = -1 by default
 The positive-side asymmetry hooks all default to neutral values
 (`OUTER_POS_X_KX_SCALE = OUTER_POS_X_KV_SCALE = OUTER_POS_X_RECOVERY_SCALE = 1`,
 `OUTER_POS_X_INWARD_EXTRA_KV = 0`), so the default controller is symmetric even though
-the code keeps those hooks available.
+the code keeps those hooks available. In addition, when the ball is already moving
+back toward the target, the velocity gain is tapered by
+
+```text
+kv_eff =
+    kv * (0.70 + 0.30 * clamp((1.60 - |x_cm|) / 1.60, 0, 1))
+```
+
+so damping is reduced while the ball is still far away and fades back to full
+strength near the hold region. To brake the center staircase capture harder, the
+firmware also adds
+
+```text
+kv_eff += 0.20 * clamp((1.50 - |x_cm|) / 1.50, 0, 1)
+```
+
+whenever the ball is already moving inward.
 
 The outer integrator is constrained by
 
 ```text
-OUTER_INTEGRAL_CLAMP_DEG = 0.18 deg
-xi_limit_cm_s            = OUTER_INTEGRAL_CLAMP_DEG / ki = 9.0 cm*s   (at gain_scale = 1)
+OUTER_INTEGRAL_CLAMP_DEG = 0.24 deg
+xi_limit_cm_s            = OUTER_INTEGRAL_CLAMP_DEG / ki = 8.0 cm*s   (at gain_scale = 1)
 ```
 
-and is only allowed to accumulate in the capture region
+The firmware now uses a two-band integral policy. Existing bias is retained inside the
+memory region
 
 ```text
-|x_cm|     <= 1.60 cm
-|x_dot_ctrl| <= 0.60 cm/s
+|x_cm|       <= 1.60 cm
+|x_dot_ctrl| <= 0.65 cm/s
+```
+
+but new bias is accumulated only inside the tighter center-approach region
+
+```text
+|x_cm|       <= 0.95 cm
+|x_dot_ctrl| <= 0.45 cm/s
 ```
 
 with an additional center band
@@ -980,26 +1004,26 @@ with an additional center band
 The firmware then applies the actual bleed rules from `main.cpp`:
 
 ```text
-outside capture band: xi <- 0.985 * xi
-during recovery:      xi <- 0.985 * xi
+outside capture band: xi <- 0.988 * xi
+during recovery:      xi <- 0.988 * xi
 wrong sign:           xi <- 0.85  * xi      if x_cm * xi < 0
-inside center band:   xi <- 0.992 * xi
+inside center band:   xi <- 0.996 * xi
 ```
 
 Integration is allowed only when the distance estimate is valid, recovery is inactive,
-the state is inside the capture band, and the command is not simultaneously saturated
-and already corrective in sign.
+the state is inside the tighter accumulation band, and the command is not
+simultaneously saturated and already corrective in sign.
 
 The core state-feedback law is therefore
 
 ```text
 i_term_deg =
-    clamp(ki * xi_cm_s, -0.18, 0.18)
+    clamp(ki * xi_cm_s, -0.24, 0.24)
 
 theta_fs_cmd_deg =
     g_outer_sign
     * (kx * x_cm
-     + kv * x_dot_ctrl
+     + kv_eff * x_dot_ctrl
      + kt * theta_rel_deg
      + kw * theta_dot_ctrl
      + i_term_deg)
@@ -1044,7 +1068,7 @@ Recovery exits when any of the following becomes true:
 invalid_count >= 8
 |x_cm| <= 0.25 cm
 or
-moving inward, |x_cm| <= 2.35 cm, and |x_dot_ctrl| >= 0.45 cm/s
+moving inward, |x_cm| <= 0.45 cm, and |x_dot_ctrl| >= 0.90 cm/s
 ```
 
 The active recovery floor is
@@ -1052,6 +1076,13 @@ The active recovery floor is
 ```text
 recovery_floor_active_deg =
     clamp(0.70 + 0.18 * max(|x_cm| - 1.20, 0), 0.00, 1.10)
+```
+
+When recovery is still active but the ball is already moving inward, that floor
+is tapered toward zero inside the center approach region:
+
+```text
+recovery_floor_active_deg *= clamp((|x_cm| - 0.25) / (1.20 - 0.25), 0, 1)
 ```
 
 and if the saturated state-feedback command is smaller in magnitude than this floor,
@@ -1144,7 +1175,7 @@ The staircase parameters hard-coded in `main.cpp` are
 ```text
 STAIRCASE_STAGE_MS         = 20000 ms
 STAIRCASE_TOTAL_MS         = 60000 ms
-STAIRCASE_FAR_SETPOINT_CM  = 12.16
+STAIRCASE_FAR_SETPOINT_CM  = 11.46
 STAIRCASE_CENTER_SETPOINT_CM = 8.53
 STAIRCASE_NEAR_SETPOINT_CM = 4.90
 ```
@@ -1183,19 +1214,21 @@ The most important telemetry columns for later thesis analysis are:
 | Inner servo | `INNER_KP_THETA`, `INNER_KD_THETA`, `INNER_THETA_DEADBAND_DEG`, `INNER_THETA_RATE_DEADBAND_DEG_S`, `INNER_MAX_STEP_DELTA` | `0.70`, `0.00`, `0.040`, `0.60`, `40` | Discrete P angle servo, deadband, and step clamp |
 | Step timing | `STEP_PERIOD_US`, `STEP_START_PERIOD_US`, `STEP_RAMP_STEPS`, `STEP_PULSE_US`, `DIR_REVERSE_SETTLE_US` | `200`, `900`, `16`, `5`, `1200 us` | Step pulse generation and reversal settling |
 | Command limits | `THETA_CMD_LIMIT_DEFAULT_DEG`, `OUTER_GAIN_SCALE_MIN/MAX` | `2.00 deg`, `0.50` to `1.50` | Default command cap and outer-loop gain-scaling range |
-| Outer gains | `OUTER_KX_DEFAULT`, `OUTER_KV_DEFAULT`, `OUTER_KT_DEFAULT`, `OUTER_KW_DEFAULT`, `OUTER_KI_DEFAULT`, `g_outer_sign` | `0.28`, `0.20`, `0.00`, `0.00`, `0.020`, `-1` | Default saturated state-feedback law |
-| Integral management | `OUTER_INTEGRAL_CLAMP_DEG`, `OUTER_INTEGRAL_CAPTURE_CM`, `OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S`, `OUTER_INTEGRAL_BLEED_OUTSIDE`, `OUTER_INTEGRAL_BLEED_RECOVERY`, `OUTER_INTEGRAL_BLEED_CENTER`, `OUTER_INTEGRAL_BLEED_WRONG_SIGN` | `0.18 deg`, `1.60 cm`, `0.60 cm/s`, `0.985`, `0.985`, `0.992`, `0.85` | Integral window, clamp, and bleed factors |
+| Outer gains | `OUTER_KX_DEFAULT`, `OUTER_KV_DEFAULT`, `OUTER_KT_DEFAULT`, `OUTER_KW_DEFAULT`, `OUTER_KI_DEFAULT`, `g_outer_sign` | `0.31`, `0.17`, `0.00`, `0.00`, `0.030`, `-1` | Default saturated state-feedback law |
+| Inward damping | `OUTER_INWARD_DAMP_BAND_CM`, `OUTER_INWARD_DAMP_MIN_SCALE`, `OUTER_CENTER_INWARD_BRAKE_BAND_CM`, `OUTER_CENTER_INWARD_EXTRA_KV`, `OUTER_POS_X_KX_SCALE`, `OUTER_POS_X_KV_SCALE`, `OUTER_POS_X_INWARD_BRAKE_BAND_CM`, `OUTER_POS_X_INWARD_EXTRA_KV`, `OUTER_POS_X_RECOVERY_SCALE` | `1.60 cm`, `0.70`, `1.50 cm`, `0.20`, `1.00`, `1.00`, `2.00 cm`, `0.00`, `1.00` | Symmetric inward-damping taper, added near-center inward brake, plus neutral positive-side asymmetry hooks |
+| Integral management | `OUTER_INTEGRAL_CLAMP_DEG`, `OUTER_INTEGRAL_CAPTURE_CM`, `OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S`, `OUTER_INTEGRAL_ACCUM_CM`, `OUTER_INTEGRAL_ACCUM_X_DOT_CM_S`, `OUTER_INTEGRAL_BLEED_OUTSIDE`, `OUTER_INTEGRAL_BLEED_RECOVERY`, `OUTER_INTEGRAL_BLEED_CENTER`, `OUTER_INTEGRAL_BLEED_WRONG_SIGN` | `0.24 deg`, `1.60 cm`, `0.65 cm/s`, `0.95 cm`, `0.45 cm/s`, `0.988`, `0.988`, `0.996`, `0.85` | Integral memory region, tighter accumulation region, clamp, and bleed factors |
 | Center/rate limits | `OUTER_CENTER_BAND_CM`, `OUTER_CENTER_BAND_X_DOT_CM_S`, `OUTER_X_DOT_LIMIT_CM_S`, `OUTER_THETA_DOT_LIMIT_DEG_S` | `0.18 cm`, `0.35 cm/s`, `4.50 cm/s`, `4.0 deg/s` | Near-target band and derivative clipping |
-| Recovery | `RECOVERY_ENTER_X_CM`, `RECOVERY_ENTER_X_DOT_CM_S`, `RECOVERY_ENTER_COUNT`, `RECOVERY_EXIT_X_CM`, `RECOVERY_EXIT_HANDOFF_X_CM`, `RECOVERY_EXIT_INWARD_X_DOT_CM_S`, `RECOVERY_FLOOR_DEFAULT_DEG`, `RECOVERY_FLOOR_MAX_DEG`, `RECOVERY_FLOOR_GAIN_DEG_PER_CM` | `1.20 cm`, `0.35 cm/s`, `8`, `0.25 cm`, `2.35 cm`, `0.45 cm/s`, `0.70 deg`, `1.10 deg`, `0.18 deg/cm` | Stall recovery detection and minimum-corrective-angle floor |
+| Recovery | `RECOVERY_ENTER_X_CM`, `RECOVERY_ENTER_X_DOT_CM_S`, `RECOVERY_ENTER_COUNT`, `RECOVERY_EXIT_X_CM`, `RECOVERY_EXIT_HANDOFF_X_CM`, `RECOVERY_EXIT_INWARD_X_DOT_CM_S`, `RECOVERY_INWARD_FLOOR_TAPER_X_CM`, `RECOVERY_FLOOR_DEFAULT_DEG`, `RECOVERY_FLOOR_MAX_DEG`, `RECOVERY_FLOOR_GAIN_DEG_PER_CM` | `1.20 cm`, `0.35 cm/s`, `8`, `0.25 cm`, `0.45 cm`, `0.90 cm/s`, `1.20 cm`, `0.70 deg`, `1.10 deg`, `0.18 deg/cm` | Stall recovery detection, handoff, and inward-tapered corrective floor |
 | Zero trim | `ZERO_TRIM_EST_X_CM`, `ZERO_TRIM_EST_X_DOT_CM_S`, `ZERO_TRIM_EST_THETA_TRACK_ERR_DEG`, `ZERO_TRIM_EST_THETA_DOT_DEG_S`, `ZERO_TRIM_EST_ALPHA` | `0.25 cm`, `0.25 cm/s`, `0.10 deg`, `0.40 deg/s`, `0.05` | Logged local balance-angle estimator |
 | Position trim | `POSITION_TRIM_BIN_COUNT`, `POSITION_TRIM_CAPTURE_X_CM`, `POSITION_TRIM_CAPTURE_X_DOT_CM_S`, `POSITION_TRIM_CAPTURE_THETA_TRACK_ERR_DEG`, `POSITION_TRIM_CAPTURE_THETA_DOT_DEG_S`, `POSITION_TRIM_MAX_ABS_DEG`, `POSITION_TRIM_ALPHA`, `POSITION_TRIM_MAX_USE_DISTANCE_CM`, `POSITION_TRIM_APPLY_X_CM`, `POSITION_TRIM_APPLY_X_DOT_CM_S`, `POSITION_TRIM_ENABLE_MIN_CM`, `POSITION_TRIM_MIN_COUNT` | `9`, `0.35 cm`, `0.25 cm/s`, `0.12 deg`, `0.40 deg/s`, `0.60 deg`, `0.08`, `1.50 cm`, `0.60 cm`, `0.60 cm/s`, `5.60 cm`, `4` | Learned local setpoint bias map and feedforward application limits |
-| Staircase | `STAIRCASE_STAGE_MS`, `STAIRCASE_FAR_SETPOINT_CM`, `STAIRCASE_CENTER_SETPOINT_CM`, `STAIRCASE_NEAR_SETPOINT_CM`, `SETPOINT_STEP_PREARM_MIN_CM` | `20000 ms`, `12.16`, `8.53`, `4.90 cm`, `1.20 cm` | Built-in thesis experiment sequence and recovery pre-arm threshold |
+| Staircase | `STAIRCASE_STAGE_MS`, `STAIRCASE_FAR_SETPOINT_CM`, `STAIRCASE_CENTER_SETPOINT_CM`, `STAIRCASE_NEAR_SETPOINT_CM`, `SETPOINT_STEP_PREARM_MIN_CM` | `20000 ms`, `11.46`, `8.53`, `4.90 cm`, `1.20 cm` | Built-in thesis experiment sequence and recovery pre-arm threshold |
 
 ### 10.2 Experiment Record: April 11, 2026 Telemetry Run
 
 The hardware run recorded in
-`telemetry_logs/20260411_142117/telemetry.csv` reflects the default tuned cascade in
-`src/main.cpp`, not the older LQI design from the previous version of this document.
+`telemetry_logs/20260411_142117/telemetry.csv` reflects the April 11, 2026 cascade
+tuning that preceded the April 13 retune documented above, not the older LQI design
+from the previous version of this document.
 
 The logged experiment record is:
 

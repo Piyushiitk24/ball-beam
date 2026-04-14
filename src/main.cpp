@@ -56,7 +56,10 @@ static const float    D_SETPOINT_DEFAULT_CM     =
     D_SETPOINT_MIDPOINT_CM + D_SETPOINT_TRIM_DEFAULT_CM;
 static const uint32_t STAIRCASE_STAGE_MS        = 20000UL;
 static const uint32_t STAIRCASE_TOTAL_MS        = 3UL * STAIRCASE_STAGE_MS;
-static const float    STAIRCASE_FAR_SETPOINT_CM = 12.16f;
+// Keep the far staircase target away from the Sharp ceiling. The April 13
+// logs show that 12.16 cm spends too much time in the sensor's upper-edge
+// invalid region during transport and hold.
+static const float    STAIRCASE_FAR_SETPOINT_CM = D_MAX_CM - 1.20f;
 static const float    STAIRCASE_CENTER_SETPOINT_CM = D_SETPOINT_DEFAULT_CM;
 static const float    STAIRCASE_NEAR_SETPOINT_CM = 4.90f;
 
@@ -123,20 +126,22 @@ static const uint8_t  PRINT_EVERY_MIN            = 1;
 static const uint8_t  PRINT_EVERY_MAX            = 50;
 static const float    THETA_CMD_LIMIT_DEFAULT_DEG = 2.00f;
 
-static const float    OUTER_KX_DEFAULT           = 0.28f;
-static const float    OUTER_KV_DEFAULT           = 0.20f;
+static const float    OUTER_KX_DEFAULT           = 0.31f;
+static const float    OUTER_KV_DEFAULT           = 0.17f;
 static const float    OUTER_KT_DEFAULT           = 0.00f;
 static const float    OUTER_KW_DEFAULT           = 0.00f;
-static const float    OUTER_KI_DEFAULT           = 0.020f;
-static const float    OUTER_INTEGRAL_CLAMP_DEG   = 0.18f;
-// Let the integrator work as a slow bias corrector over a wider region so
-// it can trim out beam non-uniformity instead of giving up near the target.
+static const float    OUTER_KI_DEFAULT           = 0.030f;
+static const float    OUTER_INTEGRAL_CLAMP_DEG   = 0.24f;
+// Preserve learned bias over a moderate region, but only accumulate new bias
+// close to the target so center capture does not wind up a large stored error.
 static const float    OUTER_INTEGRAL_CAPTURE_CM  = 1.60f;
-static const float    OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S = 0.60f;
+static const float    OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S = 0.65f;
+static const float    OUTER_INTEGRAL_ACCUM_CM    = 0.95f;
+static const float    OUTER_INTEGRAL_ACCUM_X_DOT_CM_S = 0.45f;
 // These bleed factors are applied on every 40 ms control cycle.
-static const float    OUTER_INTEGRAL_BLEED_OUTSIDE = 0.985f;
-static const float    OUTER_INTEGRAL_BLEED_RECOVERY = 0.985f;
-static const float    OUTER_INTEGRAL_BLEED_CENTER  = 0.992f;
+static const float    OUTER_INTEGRAL_BLEED_OUTSIDE = 0.988f;
+static const float    OUTER_INTEGRAL_BLEED_RECOVERY = 0.988f;
+static const float    OUTER_INTEGRAL_BLEED_CENTER  = 0.996f;
 static const float    OUTER_INTEGRAL_BLEED_WRONG_SIGN = 0.85f;
 static const float    OUTER_CENTER_BAND_CM       = 0.18f;
 static const float    OUTER_CENTER_BAND_X_DOT_CM_S = 0.35f;
@@ -149,6 +154,15 @@ static const float    OUTER_GAIN_SCALE_MAX       = 1.50f;
 // staircase heuristic.
 static const float    OUTER_POS_X_KX_SCALE       = 1.00f;
 static const float    OUTER_POS_X_KV_SCALE       = 1.00f;
+// When the ball is already moving back toward the target, reduce damping far
+// from the target and fade it back in near the hold region. This avoids
+// flipping the beam sign early while the ball is still clearly off-center.
+static const float    OUTER_INWARD_DAMP_BAND_CM  = 1.60f;
+static const float    OUTER_INWARD_DAMP_MIN_SCALE = 0.70f;
+// Add a separate near-center brake so large staircase transports do not carry
+// excessive speed through the center capture region.
+static const float    OUTER_CENTER_INWARD_BRAKE_BAND_CM = 1.50f;
+static const float    OUTER_CENTER_INWARD_EXTRA_KV = 0.20f;
 static const float    OUTER_POS_X_INWARD_BRAKE_BAND_CM = 2.00f;
 static const float    OUTER_POS_X_INWARD_EXTRA_KV = 0.00f;
 static const float    OUTER_POS_X_RECOVERY_SCALE = 1.00f;
@@ -161,8 +175,11 @@ static const uint8_t  RECOVERY_ENTER_COUNT       = 8;
 static const float    RECOVERY_EXIT_X_CM         = 0.25f;
 // Once the ball is clearly moving back toward the new target, hand off to the
 // nominal controller earlier to avoid carrying recovery too deep into center.
-static const float    RECOVERY_EXIT_HANDOFF_X_CM = 2.35f;
-static const float    RECOVERY_EXIT_INWARD_X_DOT_CM_S = 0.45f;
+static const float    RECOVERY_EXIT_HANDOFF_X_CM = 0.45f;
+static const float    RECOVERY_EXIT_INWARD_X_DOT_CM_S = 0.90f;
+// While the ball is already moving inward, fade out the recovery floor as it
+// enters the center approach region so the nominal controller can brake it.
+static const float    RECOVERY_INWARD_FLOOR_TAPER_X_CM = 1.20f;
 static const float    RECOVERY_FLOOR_DEFAULT_DEG = 0.70f;
 static const float    RECOVERY_FLOOR_MIN_DEG     = 0.00f;
 static const float    RECOVERY_FLOOR_MAX_DEG     = 1.10f;
@@ -695,10 +712,22 @@ float compute_full_state_theta_command(bool distance_valid) {
     float abs_x_cm = fabs(g_x_cm);
     float abs_x_dot_cm_s = fabs(x_dot_ctrl);
     bool positive_x_side = g_x_cm > 0.0f;
+    bool moving_inward = (g_x_cm * x_dot_ctrl) < 0.0f;
     float kx_scale = positive_x_side ? OUTER_POS_X_KX_SCALE : 1.0f;
     float kv_scale = positive_x_side ? OUTER_POS_X_KV_SCALE : 1.0f;
     float kx = OUTER_KX_DEFAULT * gain_scale * kx_scale;
     float kv = OUTER_KV_DEFAULT * gain_scale * kv_scale;
+    if (moving_inward) {
+        float inward_brake_weight =
+            clamp_float((OUTER_INWARD_DAMP_BAND_CM - abs_x_cm)
+                            / OUTER_INWARD_DAMP_BAND_CM,
+                        0.0f,
+                        1.0f);
+        float inward_kv_scale =
+            OUTER_INWARD_DAMP_MIN_SCALE
+            + ((1.0f - OUTER_INWARD_DAMP_MIN_SCALE) * inward_brake_weight);
+        kv *= inward_kv_scale;
+    }
     if (positive_x_side && x_dot_ctrl < 0.0f) {
         float inward_brake_weight =
             clamp_float((OUTER_POS_X_INWARD_BRAKE_BAND_CM - abs_x_cm)
@@ -707,13 +736,25 @@ float compute_full_state_theta_command(bool distance_valid) {
                         1.0f);
         kv += OUTER_POS_X_INWARD_EXTRA_KV * gain_scale * inward_brake_weight;
     }
+    if (moving_inward) {
+        float center_inward_brake_weight =
+            clamp_float((OUTER_CENTER_INWARD_BRAKE_BAND_CM - abs_x_cm)
+                            / OUTER_CENTER_INWARD_BRAKE_BAND_CM,
+                        0.0f,
+                        1.0f);
+        kv += OUTER_CENTER_INWARD_EXTRA_KV
+              * gain_scale
+              * center_inward_brake_weight;
+    }
     float kt = OUTER_KT_DEFAULT * gain_scale;
     float kw = OUTER_KW_DEFAULT * gain_scale;
     float ki = OUTER_KI_DEFAULT * gain_scale;
     bool recovery_state_observable = g_invalid_count < DIST_INVALID_LIMIT;
-    bool moving_inward = recovery_state_observable && ((g_x_cm * x_dot_ctrl) < 0.0f);
+    moving_inward = recovery_state_observable && moving_inward;
     bool in_capture_band = abs_x_cm <= OUTER_INTEGRAL_CAPTURE_CM
                         && abs_x_dot_cm_s <= OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S;
+    bool in_integrate_band = abs_x_cm <= OUTER_INTEGRAL_ACCUM_CM
+                          && abs_x_dot_cm_s <= OUTER_INTEGRAL_ACCUM_X_DOT_CM_S;
     bool in_center_band = abs_x_cm <= OUTER_CENTER_BAND_CM
                        && abs_x_dot_cm_s <= OUTER_CENTER_BAND_X_DOT_CM_S;
     bool stalled_off_center = recovery_state_observable
@@ -783,7 +824,7 @@ float compute_full_state_theta_command(bool distance_valid) {
                               && ((g_x_cm * limited_cmd_deg * (float)g_outer_sign) > 0.0f);
     bool can_integrate = distance_valid
                       && !g_recovery_active
-                      && in_capture_band
+                      && in_integrate_band
                       && !(clamped && command_is_corrective);
 
     if (can_integrate) {
@@ -821,6 +862,16 @@ float compute_full_state_theta_command(bool distance_valid) {
                                    * clamp_float(abs_x_cm - RECOVERY_ENTER_X_CM,
                                                  0.0f,
                                                  10.0f));
+        if (moving_inward
+                && RECOVERY_INWARD_FLOOR_TAPER_X_CM > RECOVERY_EXIT_X_CM) {
+            float taper_weight =
+                clamp_float((abs_x_cm - RECOVERY_EXIT_X_CM)
+                                / (RECOVERY_INWARD_FLOOR_TAPER_X_CM
+                                   - RECOVERY_EXIT_X_CM),
+                            0.0f,
+                            1.0f);
+            dynamic_floor_deg *= taper_weight;
+        }
         dynamic_floor_deg *= recovery_floor_scale;
         g_recovery_floor_active_deg = clamp_float(dynamic_floor_deg,
                                                   RECOVERY_FLOOR_MIN_DEG,
@@ -1599,9 +1650,13 @@ void print_config() {
     Serial.print(OUTER_KW_DEFAULT, 4); Serial.print(F(", "));
     Serial.print(OUTER_KI_DEFAULT, 4); Serial.print(F(", "));
     Serial.println(g_outer_sign);
-    Serial.print(F("# positive-x tuning kx_scale/kv_scale/inward_band/inward_extra_kv/recovery_scale = "));
+    Serial.print(F("# side/inward tuning kx_scale/kv_scale/inward_damp_band/inward_kv_min/center_inward_band/center_inward_extra_kv/pos_inward_band/inward_extra_kv/recovery_scale = "));
     Serial.print(OUTER_POS_X_KX_SCALE, 3); Serial.print(F(", "));
     Serial.print(OUTER_POS_X_KV_SCALE, 3); Serial.print(F(", "));
+    Serial.print(OUTER_INWARD_DAMP_BAND_CM, 2); Serial.print(F(", "));
+    Serial.print(OUTER_INWARD_DAMP_MIN_SCALE, 3); Serial.print(F(", "));
+    Serial.print(OUTER_CENTER_INWARD_BRAKE_BAND_CM, 2); Serial.print(F(", "));
+    Serial.print(OUTER_CENTER_INWARD_EXTRA_KV, 3); Serial.print(F(", "));
     Serial.print(OUTER_POS_X_INWARD_BRAKE_BAND_CM, 2); Serial.print(F(", "));
     Serial.print(OUTER_POS_X_INWARD_EXTRA_KV, 3); Serial.print(F(", "));
     Serial.println(OUTER_POS_X_RECOVERY_SCALE, 3);
@@ -1636,6 +1691,11 @@ void print_config() {
     Serial.print(F(" cm / "));
     Serial.print(OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S, 2);
     Serial.println(F(" cm/s"));
+    Serial.print(F("# integral accumulate |x|/|x_dot| <= "));
+    Serial.print(OUTER_INTEGRAL_ACCUM_CM, 2);
+    Serial.print(F(" cm / "));
+    Serial.print(OUTER_INTEGRAL_ACCUM_X_DOT_CM_S, 2);
+    Serial.println(F(" cm/s"));
     Serial.print(F("# recovery floor base/max/gain = "));
     Serial.print(g_recovery_floor_deg, 3);
     Serial.print(F(", "));
@@ -1656,6 +1716,9 @@ void print_config() {
     Serial.print(F(" cm / "));
     Serial.print(RECOVERY_EXIT_INWARD_X_DOT_CM_S, 2);
     Serial.println(F(" cm/s"));
+    Serial.print(F("# recovery inward floor taper |x| <= "));
+    Serial.print(RECOVERY_INWARD_FLOOR_TAPER_X_CM, 2);
+    Serial.println(F(" cm"));
     Serial.print(F("# theta command relative limit = "));
     Serial.print(g_theta_cmd_limit_deg, 3);
     Serial.println(F(" deg"));
