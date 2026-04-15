@@ -56,7 +56,7 @@ the calibrated runtime coordinates
 ```text
 theta_cal_deg = 0.07666806 * as5600_unwrapped_deg - 23.28443907
 theta_rel_deg = theta_cal_deg - theta_balance_deg
-x_cm          = d_filt_cm - setpoint_cm
+x_cm          = d_vel_cm - setpoint_cm
 ```
 
 with the empirically verified sign audit:
@@ -688,9 +688,10 @@ The controller variables used online are
 
 ```text
 d_raw_cm        = instantaneous Sharp distance from the inverse-voltage fit
-d_filt_cm       = filtered distance used for control
+d_filt_cm       = slow filtered distance retained for telemetry/monitoring
+d_vel_cm        = faster filtered distance used by the controller state
 setpoint_cm     = active target distance
-x_cm            = d_filt_cm - setpoint_cm
+x_cm            = d_vel_cm - setpoint_cm
 d_rate_cm_s     = d/dt of the velocity-oriented distance filter state
 x_dot_cm_s      = filtered estimate of x_dot
 theta_cal_deg   = calibrated AS5600 beam angle before balance zeroing
@@ -994,6 +995,14 @@ but new bias is accumulated only inside the tighter center-approach region
 |x_dot_ctrl| <= 0.45 cm/s
 ```
 
+When the active setpoint is the staircase center target, that accumulation gate is
+relaxed to
+
+```text
+|x_cm|       <= 1.20 cm
+|x_dot_ctrl| <= 0.75 cm/s
+```
+
 with an additional center band
 
 ```text
@@ -1010,9 +1019,38 @@ wrong sign:           xi <- 0.85  * xi      if x_cm * xi < 0
 inside center band:   xi <- 0.996 * xi
 ```
 
+When the active setpoint is center and the state is still close to center, the
+wrong-sign bleed is softened to preserve hold bias through small vibration-driven
+crossings:
+
+```text
+wrong sign near center: xi <- 0.96 * xi
+                        for |x_cm| <= 0.80 cm and |x_dot_ctrl| <= 1.80 cm/s
+```
+
 Integration is allowed only when the distance estimate is valid, recovery is inactive,
-the state is inside the tighter accumulation band, and the command is not
+the state is inside the active accumulation band, and the command is not
 simultaneously saturated and already corrective in sign.
+
+When the active setpoint is center and the state is inside the memory region, the
+firmware also updates a bounded center-bias seed. It tracks the current zero-trim
+estimate when available, otherwise the current integral state, and clamps that stored
+memory to `±0.10 deg` equivalent before reuse.
+
+For hold-only center operation, the firmware now also applies a separate bounded
+center-hold trim feedforward
+
+```text
+center_hold_trim_deg =
+    clamp(zero_trim_est_deg or ki * center_bias_xi_cm_s, -0.12, 0.12)
+    * min(clamp((2.00 - |x_cm|) / 2.00, 0, 1),
+          clamp((2.50 - |x_dot_cm_s|) / 2.50, 0, 1))
+```
+
+It is used only after the zero-trim estimate has at least `8` accepted samples, and it
+is added after the outer state-feedback command. When the active setpoint is center,
+the position-trim map is disabled so this dedicated center trim is the only learned
+bias feedforward path.
 
 The core state-feedback law is therefore
 
@@ -1095,17 +1133,31 @@ Large inward staircase setpoint jumps also pre-arm recovery whenever
 ```
 
 and the ball is still at least `1.20 cm` away from the new target after the jump.
+The staircase center transition is excluded from this pre-arm path so the center stage
+enters on the same recovery logic as isolated `M2` center hold.
 
 **2. Zero-trim estimator**
 
-The firmware logs a slow estimate of the local balance angle, but does not feed it back
-into the control law. It updates only under tight near-equilibrium conditions:
+The firmware maintains a slow estimate of the local balance angle. It is still logged
+for telemetry, and it now also seeds the bounded center-bias memory that is reused when
+the staircase returns to center. It updates only under tight near-equilibrium
+conditions:
 
 ```text
-|x_cm| <= 0.25 cm
-|x_dot_cm_s| <= 0.25 cm/s
-|theta_cmd_rel_deg - theta_rel_deg| <= 0.10 deg
-|theta_dot_deg_s| <= 0.40 deg/s
+|x_cm| <= 0.50 cm
+|x_dot_cm_s| <= 1.00 cm/s
+|theta_cmd_rel_deg - theta_rel_deg| <= 0.20 deg
+|theta_dot_deg_s| <= 1.20 deg/s
+```
+
+When the active setpoint is center, the estimator tightens further to avoid learning
+from small residual oscillations:
+
+```text
+|x_cm| <= 0.35 cm
+|x_dot_cm_s| <= 0.45 cm/s
+|theta_cmd_rel_deg - theta_rel_deg| <= 0.12 deg
+|theta_dot_deg_s| <= 0.80 deg/s
 ```
 
 and uses the EMA
@@ -1115,6 +1167,11 @@ zero_trim_est_deg[k] =
     zero_trim_est_deg[k-1]
     + 0.05 * (theta_rel_deg[k] - zero_trim_est_deg[k-1])
 ```
+
+During staircase phase changes, this estimate is no longer reset, so a center-hold bias
+learned before the far excursion can be reused when the setpoint comes back to center.
+The staircase center transition no longer seeds the outer integrator, so that reuse
+happens only through the same center-hold trim path used in isolated `M2`.
 
 **3. Position-trim map and feedforward**
 
@@ -1134,11 +1191,15 @@ Each bin stores an EMA of the locally required holding angle, clipped to
 `[-0.60, 0.60] deg`, and samples are accepted only when
 
 ```text
-|x_cm| <= 0.35 cm
-|x_dot_cm_s| <= 0.25 cm/s
-|theta_cmd_rel_deg - theta_rel_deg| <= 0.12 deg
-|theta_dot_deg_s| <= 0.40 deg/s
+|x_cm| <= 0.50 cm
+|x_dot_cm_s| <= 1.00 cm/s
+|theta_cmd_rel_deg - theta_rel_deg| <= 0.20 deg
+|theta_dot_deg_s| <= 1.20 deg/s
 ```
+
+The center setpoint is excluded from this map. Center hold now uses only the dedicated
+center-trim path above, so position trim cannot stack with center trim and flip the
+small-error command sign.
 
 The lookup interpolates between populated neighboring bins, requires at least
 `4` samples per usable bin, and refuses to use a trim point farther than `1.50 cm`
@@ -1182,9 +1243,11 @@ STAIRCASE_NEAR_SETPOINT_CM = 4.90
 
 Every staircase setpoint change resets the dynamic controller states tied to the old
 target: `x_cm`, `x_dot_cm_s`, `theta_dot_deg_s`, `theta_fs_cmd_deg`,
-`theta_cmd_rel_deg`, `xi_cm_s`, the inner residual, and the zero-trim estimator. The
-filtered distance state itself is preserved so the physical motion estimate remains
-continuous.
+`theta_cmd_rel_deg`, `xi_cm_s`, and the inner residual. The distance filter states and
+the zero-trim estimator are preserved so the physical motion estimate and learned
+center-hold bias remain continuous across the phase change. When the staircase enters
+the center phase, it does not seed the outer integrator or pre-arm recovery, so the
+center entry uses the same controller path as isolated `M2` center hold.
 
 The most important telemetry columns for later thesis analysis are:
 
@@ -1207,7 +1270,7 @@ The most important telemetry columns for later thesis analysis are:
 | Timing | `LOOP_MS`, `DT` | `40 ms`, `0.040 s` | Main control cadence |
 | Sharp fit | `SHARP_ADC_SAMPLES`, `SHARP_FIT_K_V_CM`, `SHARP_FIT_OFFSET_CM`, `SHARP_MIN_VALID_V` | `8`, `12.25`, `-0.62`, `0.08 V` | Distance acquisition and inverse-voltage calibration |
 | Distance window | `D_MIN_CM`, `D_MAX_CM`, `D_SETPOINT_DEFAULT_CM` | `4.40`, `12.66`, `8.53 cm` | Valid operating range and default center setpoint |
-| Distance filtering | `DIST_EMA_ALPHA`, `DIST_VEL_EMA_ALPHA`, `X_DOT_EMA_ALPHA`, `X_DOT_EMA_ALPHA_NEAR`, `DIST_INVALID_LIMIT` | `0.25`, `0.60`, `0.12`, `0.28`, `8` | Position and velocity filtering plus fault threshold |
+| Distance filtering | `DIST_EMA_ALPHA`, `DIST_VEL_EMA_ALPHA`, `X_DOT_EMA_ALPHA`, `X_DOT_EMA_ALPHA_NEAR`, `DIST_INVALID_LIMIT` | `0.25`, `0.78`, `0.20`, `0.40`, `8` | Slow telemetry distance filter, faster control distance filter, velocity filtering, and fault threshold |
 | Angle calibration | `AS5600_RAW_TO_DEG`, `THETA_SLOPE_DEG_PER_AS_DEG`, `THETA_OFFSET_DEG`, `THETA_DOT_EMA_ALPHA` | `360/4096`, `0.07666806`, `-23.28443907`, `0.30` | AS5600 conversion and affine beam-angle fit |
 | Angle safety window | `THETA_CAL_MIN_DEG`, `THETA_CAL_MAX_DEG`, `THETA_CAL_MARGIN_DEG`, `THETA_CAL_EXTRAPOLATE_DEG` | `-0.70`, `3.10`, `0.10`, `0.30 deg` | Soft commandable beam-angle envelope `[-0.90, 3.30] deg` |
 | Stepper conversion | `STEPS_PER_REV`, `STEPS_PER_BEAM_DEG`, `DIR_SIGN`, `INNER_STEP_SIGN` | `3200`, `115.9399219`, `-1`, `-1` | Empirical stepper-to-beam conversion and sign chain |
@@ -1216,12 +1279,14 @@ The most important telemetry columns for later thesis analysis are:
 | Command limits | `THETA_CMD_LIMIT_DEFAULT_DEG`, `OUTER_GAIN_SCALE_MIN/MAX` | `2.00 deg`, `0.50` to `1.50` | Default command cap and outer-loop gain-scaling range |
 | Outer gains | `OUTER_KX_DEFAULT`, `OUTER_KV_DEFAULT`, `OUTER_KT_DEFAULT`, `OUTER_KW_DEFAULT`, `OUTER_KI_DEFAULT`, `g_outer_sign` | `0.31`, `0.17`, `0.00`, `0.00`, `0.030`, `-1` | Default saturated state-feedback law |
 | Inward damping | `OUTER_INWARD_DAMP_BAND_CM`, `OUTER_INWARD_DAMP_MIN_SCALE`, `OUTER_CENTER_INWARD_BRAKE_BAND_CM`, `OUTER_CENTER_INWARD_EXTRA_KV`, `OUTER_POS_X_KX_SCALE`, `OUTER_POS_X_KV_SCALE`, `OUTER_POS_X_INWARD_BRAKE_BAND_CM`, `OUTER_POS_X_INWARD_EXTRA_KV`, `OUTER_POS_X_RECOVERY_SCALE` | `1.60 cm`, `0.70`, `1.50 cm`, `0.20`, `1.00`, `1.00`, `2.00 cm`, `0.00`, `1.00` | Symmetric inward-damping taper, added near-center inward brake, plus neutral positive-side asymmetry hooks |
-| Integral management | `OUTER_INTEGRAL_CLAMP_DEG`, `OUTER_INTEGRAL_CAPTURE_CM`, `OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S`, `OUTER_INTEGRAL_ACCUM_CM`, `OUTER_INTEGRAL_ACCUM_X_DOT_CM_S`, `OUTER_INTEGRAL_BLEED_OUTSIDE`, `OUTER_INTEGRAL_BLEED_RECOVERY`, `OUTER_INTEGRAL_BLEED_CENTER`, `OUTER_INTEGRAL_BLEED_WRONG_SIGN` | `0.24 deg`, `1.60 cm`, `0.65 cm/s`, `0.95 cm`, `0.45 cm/s`, `0.988`, `0.988`, `0.996`, `0.85` | Integral memory region, tighter accumulation region, clamp, and bleed factors |
+| Integral management | `OUTER_INTEGRAL_CLAMP_DEG`, `OUTER_INTEGRAL_CAPTURE_CM`, `OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S`, `OUTER_INTEGRAL_ACCUM_CM`, `OUTER_INTEGRAL_ACCUM_X_DOT_CM_S`, `OUTER_CENTER_INTEGRAL_ACCUM_CM`, `OUTER_CENTER_INTEGRAL_ACCUM_X_DOT_CM_S`, `OUTER_INTEGRAL_BLEED_OUTSIDE`, `OUTER_INTEGRAL_BLEED_RECOVERY`, `OUTER_INTEGRAL_BLEED_CENTER`, `OUTER_INTEGRAL_BLEED_WRONG_SIGN`, `OUTER_INTEGRAL_BLEED_WRONG_SIGN_CENTER`, `OUTER_WRONG_SIGN_CENTER_X_CM`, `OUTER_WRONG_SIGN_CENTER_X_DOT_CM_S` | `0.24 deg`, `1.60 cm`, `0.65 cm/s`, `0.95 cm`, `0.45 cm/s`, `1.20 cm`, `0.75 cm/s`, `0.988`, `0.988`, `0.996`, `0.85`, `0.96`, `0.80 cm`, `1.80 cm/s` | Integral memory region, default accumulation region, relaxed center accumulation region, clamp, and center-protected bleed factors |
+| Center bias memory | `CENTER_SETPOINT_TOL_CM`, `OUTER_CENTER_BIAS_MEMORY_ALPHA`, `OUTER_CENTER_BIAS_MEMORY_MAX_DEG` | `0.05 cm`, `0.10`, `0.10 deg` | Center-only low-frequency bias memory retained across staircase phases and available to the center-hold trim fallback |
+| Center hold trim | `CENTER_HOLD_TRIM_MAX_ABS_DEG`, `CENTER_HOLD_TRIM_APPLY_X_CM`, `CENTER_HOLD_TRIM_APPLY_X_DOT_CM_S`, `CENTER_HOLD_TRIM_MIN_COUNT` | `0.12 deg`, `2.00 cm`, `2.50 cm/s`, `8` | Bounded center-hold feedforward derived from zero trim or center-bias memory after a minimum settled-sample count |
 | Center/rate limits | `OUTER_CENTER_BAND_CM`, `OUTER_CENTER_BAND_X_DOT_CM_S`, `OUTER_X_DOT_LIMIT_CM_S`, `OUTER_THETA_DOT_LIMIT_DEG_S` | `0.18 cm`, `0.35 cm/s`, `4.50 cm/s`, `4.0 deg/s` | Near-target band and derivative clipping |
 | Recovery | `RECOVERY_ENTER_X_CM`, `RECOVERY_ENTER_X_DOT_CM_S`, `RECOVERY_ENTER_COUNT`, `RECOVERY_EXIT_X_CM`, `RECOVERY_EXIT_HANDOFF_X_CM`, `RECOVERY_EXIT_INWARD_X_DOT_CM_S`, `RECOVERY_INWARD_FLOOR_TAPER_X_CM`, `RECOVERY_FLOOR_DEFAULT_DEG`, `RECOVERY_FLOOR_MAX_DEG`, `RECOVERY_FLOOR_GAIN_DEG_PER_CM` | `1.20 cm`, `0.35 cm/s`, `8`, `0.25 cm`, `0.45 cm`, `0.90 cm/s`, `1.20 cm`, `0.70 deg`, `1.10 deg`, `0.18 deg/cm` | Stall recovery detection, handoff, and inward-tapered corrective floor |
-| Zero trim | `ZERO_TRIM_EST_X_CM`, `ZERO_TRIM_EST_X_DOT_CM_S`, `ZERO_TRIM_EST_THETA_TRACK_ERR_DEG`, `ZERO_TRIM_EST_THETA_DOT_DEG_S`, `ZERO_TRIM_EST_ALPHA` | `0.25 cm`, `0.25 cm/s`, `0.10 deg`, `0.40 deg/s`, `0.05` | Logged local balance-angle estimator |
-| Position trim | `POSITION_TRIM_BIN_COUNT`, `POSITION_TRIM_CAPTURE_X_CM`, `POSITION_TRIM_CAPTURE_X_DOT_CM_S`, `POSITION_TRIM_CAPTURE_THETA_TRACK_ERR_DEG`, `POSITION_TRIM_CAPTURE_THETA_DOT_DEG_S`, `POSITION_TRIM_MAX_ABS_DEG`, `POSITION_TRIM_ALPHA`, `POSITION_TRIM_MAX_USE_DISTANCE_CM`, `POSITION_TRIM_APPLY_X_CM`, `POSITION_TRIM_APPLY_X_DOT_CM_S`, `POSITION_TRIM_ENABLE_MIN_CM`, `POSITION_TRIM_MIN_COUNT` | `9`, `0.35 cm`, `0.25 cm/s`, `0.12 deg`, `0.40 deg/s`, `0.60 deg`, `0.08`, `1.50 cm`, `0.60 cm`, `0.60 cm/s`, `5.60 cm`, `4` | Learned local setpoint bias map and feedforward application limits |
-| Staircase | `STAIRCASE_STAGE_MS`, `STAIRCASE_FAR_SETPOINT_CM`, `STAIRCASE_CENTER_SETPOINT_CM`, `STAIRCASE_NEAR_SETPOINT_CM`, `SETPOINT_STEP_PREARM_MIN_CM` | `20000 ms`, `11.46`, `8.53`, `4.90 cm`, `1.20 cm` | Built-in thesis experiment sequence and recovery pre-arm threshold |
+| Zero trim | `ZERO_TRIM_EST_X_CM`, `ZERO_TRIM_EST_X_DOT_CM_S`, `ZERO_TRIM_EST_THETA_TRACK_ERR_DEG`, `ZERO_TRIM_EST_THETA_DOT_DEG_S`, `ZERO_TRIM_EST_CENTER_X_CM`, `ZERO_TRIM_EST_CENTER_X_DOT_CM_S`, `ZERO_TRIM_EST_CENTER_THETA_TRACK_ERR_DEG`, `ZERO_TRIM_EST_CENTER_THETA_DOT_DEG_S`, `ZERO_TRIM_EST_ALPHA` | `0.50 cm`, `1.00 cm/s`, `0.20 deg`, `1.20 deg/s`, `0.35 cm`, `0.45 cm/s`, `0.12 deg`, `0.80 deg/s`, `0.05` | Local balance-angle estimator with tighter center-only capture before center-hold trim learns from it |
+| Position trim | `POSITION_TRIM_BIN_COUNT`, `POSITION_TRIM_CAPTURE_X_CM`, `POSITION_TRIM_CAPTURE_X_DOT_CM_S`, `POSITION_TRIM_CAPTURE_THETA_TRACK_ERR_DEG`, `POSITION_TRIM_CAPTURE_THETA_DOT_DEG_S`, `POSITION_TRIM_MAX_ABS_DEG`, `POSITION_TRIM_ALPHA`, `POSITION_TRIM_MAX_USE_DISTANCE_CM`, `POSITION_TRIM_APPLY_X_CM`, `POSITION_TRIM_APPLY_X_DOT_CM_S`, `POSITION_TRIM_ENABLE_MIN_CM`, `POSITION_TRIM_MIN_COUNT` | `9`, `0.50 cm`, `1.00 cm/s`, `0.20 deg`, `1.20 deg/s`, `0.60 deg`, `0.08`, `1.50 cm`, `0.60 cm`, `0.60 cm/s`, `5.60 cm`, `4` | Learned local setpoint bias map for non-center targets only, with relaxed capture thresholds for real beam vibration |
+| Staircase | `STAIRCASE_STAGE_MS`, `STAIRCASE_FAR_SETPOINT_CM`, `STAIRCASE_CENTER_SETPOINT_CM`, `STAIRCASE_NEAR_SETPOINT_CM`, `SETPOINT_STEP_PREARM_MIN_CM` | `20000 ms`, `11.46`, `8.53`, `4.90 cm`, `1.20 cm` | Built-in thesis experiment sequence and inward-step recovery pre-arm threshold for non-center stages |
 
 ### 10.2 Experiment Record: April 11, 2026 Telemetry Run
 

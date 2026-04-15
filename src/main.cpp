@@ -56,17 +56,24 @@ static const float    D_SETPOINT_DEFAULT_CM     =
     D_SETPOINT_MIDPOINT_CM + D_SETPOINT_TRIM_DEFAULT_CM;
 static const uint32_t STAIRCASE_STAGE_MS        = 20000UL;
 static const uint32_t STAIRCASE_TOTAL_MS        = 3UL * STAIRCASE_STAGE_MS;
-// Keep the far staircase target away from the Sharp ceiling. The April 13
-// logs show that 12.16 cm spends too much time in the sensor's upper-edge
-// invalid region during transport and hold.
-static const float    STAIRCASE_FAR_SETPOINT_CM = D_MAX_CM - 1.20f;
+// Keep the far staircase target away from the Sharp ceiling. The April 13 and
+// April 14 logs still show too many upper-edge invalid samples near 11.46 cm.
+static const float    STAIRCASE_FAR_SETPOINT_CM = D_MAX_CM - 1.55f;
 static const float    STAIRCASE_CENTER_SETPOINT_CM = D_SETPOINT_DEFAULT_CM;
 static const float    STAIRCASE_NEAR_SETPOINT_CM = 4.90f;
 
 static const float    DIST_EMA_ALPHA            = 0.25f;
-static const float    DIST_VEL_EMA_ALPHA        = 0.60f;
-static const float    X_DOT_EMA_ALPHA           = 0.12f;
-static const float    X_DOT_EMA_ALPHA_NEAR      = 0.28f;
+// Keep a slow display-oriented distance filter for telemetry, but run the
+// controller from a faster position estimate to avoid stale-state corrections.
+static const float    DIST_VEL_EMA_ALPHA        = 0.78f;
+// Blend back toward the slower distance estimate once the ball is close to the
+// active target so hold behavior is not driven by fast-filter jitter.
+static const float    DIST_CTRL_BLEND_BAND_CM   = 1.20f;
+static const float    X_DOT_EMA_ALPHA           = 0.20f;
+// Near the target, keep the velocity estimate noticeably smoother so the
+// outer loop does not interpret sensor flutter as real ball motion.
+static const float    X_DOT_EMA_ALPHA_NEAR      = 0.08f;
+static const float    X_DOT_NEAR_TARGET_BAND_CM = 1.20f;
 
 
 // ================================================================
@@ -101,10 +108,14 @@ static const int8_t   DIR_SIGN                   = -1;
 static const int8_t   INNER_STEP_SIGN            = -1;
 
 static const float    INNER_KP_THETA             = 0.70f;
-static const float    INNER_KD_THETA             = 0.000f;
+// Add a small rate term so the angle loop does not chase every sign flip with
+// a full-strength reversal once the beam is already moving toward target.
+static const float    INNER_KD_THETA             = 0.030f;
 static const float    INNER_THETA_DEADBAND_DEG   = 0.040f;
 static const float    INNER_THETA_RATE_DEADBAND_DEG_S = 0.60f;
-static const int32_t  INNER_MAX_STEP_DELTA       = 40;
+// The latest logs spend too much time at the inner-loop step cap. Raise the
+// per-cycle budget modestly; it still fits comfortably inside the 40 ms loop.
+static const int32_t  INNER_MAX_STEP_DELTA       = 60;
 static const uint32_t STEP_PERIOD_US             = 200;
 static const uint32_t STEP_START_PERIOD_US       = 900;
 static const uint16_t STEP_RAMP_STEPS            = 16;
@@ -136,24 +147,61 @@ static const float    OUTER_INTEGRAL_CLAMP_DEG   = 0.24f;
 // close to the target so center capture does not wind up a large stored error.
 static const float    OUTER_INTEGRAL_CAPTURE_CM  = 1.60f;
 static const float    OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S = 0.65f;
-static const float    OUTER_INTEGRAL_ACCUM_CM    = 0.95f;
-static const float    OUTER_INTEGRAL_ACCUM_X_DOT_CM_S = 0.45f;
+static const float    OUTER_INTEGRAL_ACCUM_CM    = 1.10f;
+static const float    OUTER_INTEGRAL_ACCUM_X_DOT_CM_S = 0.55f;
+// Center hold needs a slightly wider accumulation gate after the staircase
+// transition so it can rebuild low-frequency bias without reopening the large
+// off-center windup path.
+static const float    OUTER_CENTER_INTEGRAL_ACCUM_CM = 1.50f;
+static const float    OUTER_CENTER_INTEGRAL_ACCUM_X_DOT_CM_S = 1.80f;
 // These bleed factors are applied on every 40 ms control cycle.
 static const float    OUTER_INTEGRAL_BLEED_OUTSIDE = 0.988f;
 static const float    OUTER_INTEGRAL_BLEED_RECOVERY = 0.988f;
 static const float    OUTER_INTEGRAL_BLEED_CENTER  = 0.996f;
 static const float    OUTER_INTEGRAL_BLEED_WRONG_SIGN = 0.85f;
+// Near center, small vibration-driven sign changes should not annihilate the
+// learned hold bias in just a few samples.
+static const float    OUTER_INTEGRAL_BLEED_WRONG_SIGN_CENTER = 0.96f;
+static const float    OUTER_WRONG_SIGN_CENTER_X_CM = 0.80f;
+static const float    OUTER_WRONG_SIGN_CENTER_X_DOT_CM_S = 1.80f;
+// Retain a bounded amount of center-hold bias across staircase phase changes so
+// the center trim fallback can reuse it without seeding the outer integrator.
+static const float    CENTER_SETPOINT_TOL_CM    = 0.05f;
+static const float    OUTER_CENTER_BIAS_MEMORY_ALPHA = 0.10f;
+static const float    OUTER_CENTER_BIAS_MEMORY_MAX_DEG = 0.10f;
+static const float    CENTER_HOLD_TRIM_MAX_ABS_DEG = 0.06f;
+// Keep center-hold trim out of large transport motion; it should only assist
+// the final hold region.
+static const float    CENTER_HOLD_TRIM_APPLY_X_CM = 0.35f;
+static const float    CENTER_HOLD_TRIM_APPLY_X_DOT_CM_S = 0.35f;
+static const uint8_t  CENTER_HOLD_TRIM_MIN_COUNT = 16;
 static const float    OUTER_CENTER_BAND_CM       = 0.18f;
 static const float    OUTER_CENTER_BAND_X_DOT_CM_S = 0.35f;
 static const float    OUTER_X_DOT_LIMIT_CM_S     = 4.50f;
 static const float    OUTER_THETA_DOT_LIMIT_DEG_S = 4.0f;
 static const float    OUTER_GAIN_SCALE_MIN       = 0.50f;
 static const float    OUTER_GAIN_SCALE_MAX       = 1.50f;
-// Keep transport symmetric by default. If future data shows a real plant-side
-// asymmetry, retune from measured logs rather than carrying over a one-sided
-// staircase heuristic.
-static const float    OUTER_POS_X_KX_SCALE       = 1.00f;
-static const float    OUTER_POS_X_KV_SCALE       = 1.00f;
+// Shape the outer-loop command so center hold does not chatter and the inner
+// loop is not forced into repeated ±step-cap reversals.
+static const float    OUTER_CTRL_SOFTEN_X_CM     = 1.10f;
+static const float    OUTER_CTRL_SOFTEN_X_DOT_CM_S = 1.60f;
+static const float    OUTER_CTRL_SOFTEN_MAX_REDUCTION = 0.42f;
+static const float    OUTER_CMD_SLEW_NEAR_DEG_S  = 3.00f;
+static const float    OUTER_CMD_SLEW_FAR_DEG_S   = 9.00f;
+// During large staircase-center transports, allow faster command ramping far
+// from target so excursions are arrested earlier.
+static const float    OUTER_CMD_SLEW_TRANSPORT_X_CM = 2.40f;
+static const float    OUTER_CMD_SLEW_TRANSPORT_GAIN = 0.80f;
+// Only zero tiny commands inside a genuinely tight hold region. The previous
+// gate was silencing corrective action while 0.1-0.2 cm residual error
+// remained, which shows up clearly in the April 14 logs.
+static const float    OUTER_CTRL_HOLD_X_CM       = 0.08f;
+static const float    OUTER_CTRL_HOLD_X_DOT_CM_S = 0.20f;
+static const float    OUTER_CTRL_HOLD_DEADBAND_DEG = 0.025f;
+// The April 14 logs show that the negative-command side is a bit weaker in
+// hold and transport, so keep a modest positive-x authority boost.
+static const float    OUTER_POS_X_KX_SCALE       = 1.12f;
+static const float    OUTER_POS_X_KV_SCALE       = 1.08f;
 // When the ball is already moving back toward the target, reduce damping far
 // from the target and fade it back in near the hold region. This avoids
 // flipping the beam sign early while the ball is still clearly off-center.
@@ -162,15 +210,46 @@ static const float    OUTER_INWARD_DAMP_MIN_SCALE = 0.70f;
 // Add a separate near-center brake so large staircase transports do not carry
 // excessive speed through the center capture region.
 static const float    OUTER_CENTER_INWARD_BRAKE_BAND_CM = 1.50f;
-static const float    OUTER_CENTER_INWARD_EXTRA_KV = 0.20f;
+static const float    OUTER_CENTER_INWARD_EXTRA_KV = 0.14f;
+// High-energy center capture schedule: when center-target error or speed is
+// large, temporarily increase damping more than stiffness for faster settle
+// with fewer recrosses; near-equilibrium hold remains unchanged.
+static const float    OUTER_CENTER_CAPTURE_X_ENTER_CM = 0.90f;
+static const float    OUTER_CENTER_CAPTURE_X_FULL_CM = 2.40f;
+static const float    OUTER_CENTER_CAPTURE_X_DOT_ENTER_CM_S = 1.40f;
+static const float    OUTER_CENTER_CAPTURE_X_DOT_FULL_CM_S = 3.60f;
+static const float    OUTER_CENTER_CAPTURE_KX_SCALE_MAX = 1.10f;
+static const float    OUTER_CENTER_CAPTURE_KV_SCALE_MAX = 1.90f;
+// While already moving inward, keep only a fraction of the extra capture
+// damping and add a small stiffness bonus so the ball does not stop short.
+static const float    OUTER_CENTER_CAPTURE_INWARD_KV_REDUCTION = 0.70f;
+static const float    OUTER_CENTER_CAPTURE_INWARD_KX_BONUS = 0.02f;
+// Add an explicit near-center speed brake to dissipate kinetic energy during
+// fast crossings without adding damping in quiet hold.
+static const float    OUTER_CENTER_SPEED_BRAKE_BAND_CM = 1.15f;
+static const float    OUTER_CENTER_SPEED_BRAKE_X_DOT_ENTER_CM_S = 1.10f;
+static const float    OUTER_CENTER_SPEED_BRAKE_X_DOT_FULL_CM_S = 3.20f;
+static const float    OUTER_CENTER_SPEED_BRAKE_EXTRA_KV = 0.42f;
+// Staircase center keeps a small additional transport boost on top of the
+// generic center-capture schedule.
+static const float    OUTER_STAIR_CENTER_TRANSPORT_KX_SCALE_MAX = 1.10f;
+static const float    OUTER_STAIR_CENTER_TRANSPORT_KV_SCALE_MAX = 1.45f;
+static const float    OUTER_STAIR_CENTER_TRANSPORT_X_CM = 2.40f;
+static const float    OUTER_STAIR_CENTER_SETTLE_BRAKE_BAND_CM = 1.40f;
+static const float    OUTER_STAIR_CENTER_SETTLE_EXTRA_KV = 0.18f;
 static const float    OUTER_POS_X_INWARD_BRAKE_BAND_CM = 2.00f;
 static const float    OUTER_POS_X_INWARD_EXTRA_KV = 0.00f;
-static const float    OUTER_POS_X_RECOVERY_SCALE = 1.00f;
+static const float    OUTER_POS_X_RECOVERY_SCALE = 1.10f;
 // Recovery is a minimum-corrective-angle floor used only for truly stalled,
 // off-center motion. Keep it out of the near-center regime, where it injects
 // energy and causes unnecessary crossovers.
 static const float    RECOVERY_ENTER_X_CM        = 1.20f;
 static const float    RECOVERY_ENTER_X_DOT_CM_S  = 0.35f;
+// The April 14 center-return logs spend long stretches about 0.8-1.3 cm off
+// target without ever meeting the generic stall gate. Give center hold a
+// dedicated recovery entry band so the recovery floor can break that offset.
+static const float    RECOVERY_CENTER_ENTER_X_CM = 0.80f;
+static const float    RECOVERY_CENTER_ENTER_X_DOT_CM_S = 1.20f;
 static const uint8_t  RECOVERY_ENTER_COUNT       = 8;
 static const float    RECOVERY_EXIT_X_CM         = 0.25f;
 // Once the ball is clearly moving back toward the new target, hand off to the
@@ -187,18 +266,25 @@ static const float    RECOVERY_FLOOR_GAIN_DEG_PER_CM = 0.18f;
 // Large staircase setpoint jumps should pre-arm corrective transport instead of
 // waiting for the generic stall detector to rediscover the condition.
 static const float    SETPOINT_STEP_PREARM_MIN_CM = 1.20f;
-static const float    ZERO_TRIM_EST_X_CM         = 0.25f;
-static const float    ZERO_TRIM_EST_X_DOT_CM_S   = 0.25f;
-static const float    ZERO_TRIM_EST_THETA_TRACK_ERR_DEG = 0.10f;
-static const float    ZERO_TRIM_EST_THETA_DOT_DEG_S = 0.40f;
-static const float    ZERO_TRIM_EST_ALPHA        = 0.05f;
+static const float    ZERO_TRIM_EST_X_CM         = 0.50f;
+static const float    ZERO_TRIM_EST_X_DOT_CM_S   = 1.00f;
+static const float    ZERO_TRIM_EST_THETA_TRACK_ERR_DEG = 0.20f;
+static const float    ZERO_TRIM_EST_THETA_DOT_DEG_S = 1.20f;
+static const float    ZERO_TRIM_EST_CENTER_X_CM  = 0.18f;
+static const float    ZERO_TRIM_EST_CENTER_X_DOT_CM_S = 0.25f;
+static const float    ZERO_TRIM_EST_CENTER_THETA_TRACK_ERR_DEG = 0.08f;
+static const float    ZERO_TRIM_EST_CENTER_THETA_DOT_DEG_S = 0.60f;
+static const float    ZERO_TRIM_EST_CENTER_FS_CMD_DEG = 0.08f;
+static const float    ZERO_TRIM_EST_ALPHA        = 0.02f;
 // Learn a small position-dependent trim so local beam bow/friction does not
-// appear as a permanent control error near the sensor-side targets.
+// appear as a permanent control error near the sensor-side targets. Center
+// hold now uses the dedicated zero-trim path instead so the two trim learners
+// cannot stack and flip the small-error command.
 static const uint8_t  POSITION_TRIM_BIN_COUNT    = 9;
-static const float    POSITION_TRIM_CAPTURE_X_CM = 0.35f;
-static const float    POSITION_TRIM_CAPTURE_X_DOT_CM_S = 0.25f;
-static const float    POSITION_TRIM_CAPTURE_THETA_TRACK_ERR_DEG = 0.12f;
-static const float    POSITION_TRIM_CAPTURE_THETA_DOT_DEG_S = 0.40f;
+static const float    POSITION_TRIM_CAPTURE_X_CM = 0.50f;
+static const float    POSITION_TRIM_CAPTURE_X_DOT_CM_S = 1.00f;
+static const float    POSITION_TRIM_CAPTURE_THETA_TRACK_ERR_DEG = 0.20f;
+static const float    POSITION_TRIM_CAPTURE_THETA_DOT_DEG_S = 1.20f;
 static const float    POSITION_TRIM_MAX_ABS_DEG  = 0.60f;
 static const float    POSITION_TRIM_ALPHA        = 0.08f;
 static const float    POSITION_TRIM_MAX_USE_DISTANCE_CM = 1.50f;
@@ -290,6 +376,7 @@ static float          g_theta_fs_cmd_deg         = 0.0f;
 static float          g_theta_trim_ff_deg        = 0.0f;
 static float          g_theta_cmd_prelimit_deg   = 0.0f;
 static float          g_theta_cmd_rel_deg        = 0.0f;
+static float          g_theta_ctrl_shaped_deg    = 0.0f;
 static bool           g_theta_cmd_saturated      = false;
 static float          g_outer_xi_cm_s            = 0.0f;
 static bool           g_recovery_active          = false;
@@ -299,6 +386,8 @@ static float          g_recovery_floor_active_deg = RECOVERY_FLOOR_DEFAULT_DEG;
 static bool           g_zero_trim_est_valid      = false;
 static float          g_zero_trim_est_deg        = 0.0f;
 static uint16_t       g_zero_trim_est_count      = 0;
+static bool           g_center_bias_xi_valid     = false;
+static float          g_center_bias_xi_cm_s      = 0.0f;
 static bool           g_position_trim_valid[POSITION_TRIM_BIN_COUNT] = {false};
 static float          g_position_trim_deg[POSITION_TRIM_BIN_COUNT] = {0.0f};
 static uint16_t       g_position_trim_count[POSITION_TRIM_BIN_COUNT] = {0};
@@ -319,13 +408,16 @@ bool update_as5600(void);
 float unwrap_degrees(float wrapped_deg);
 void update_derived_states(bool distance_valid, bool theta_valid);
 float clamp_float(float value, float lo, float hi);
-float near_distance_weight(void);
+float control_distance_cm(void);
+float near_target_weight(float x_cm);
 int32_t clamp_i32(int32_t value, int32_t lo, int32_t hi);
 int32_t round_to_i32(float value);
 float clamp_theta_rel_command(float theta_rel_deg);
+float shape_outer_control_command(float theta_ctrl_deg, bool distance_valid);
 float compute_full_state_theta_command(bool distance_valid);
 int32_t compute_inner_step_delta(float theta_cmd_rel_deg);
 void reset_zero_trim_estimator(void);
+void reset_center_bias_memory(void);
 void update_zero_trim_estimator(bool distance_valid, bool theta_valid);
 void reset_position_trim_map(void);
 bool position_trim_enabled_for_setpoint_cm(float cm);
@@ -333,7 +425,9 @@ uint8_t position_trim_bin_from_cm(float cm);
 float position_trim_bin_center_cm(uint8_t idx);
 float lookup_position_trim_deg(float cm);
 float compute_position_trim_ff_deg(bool distance_valid);
+float compute_center_hold_trim_ff_deg(bool distance_valid);
 void update_position_trim_map(bool distance_valid, bool theta_valid);
+bool is_center_setpoint_cm(float cm);
 void step_relative(int32_t delta_steps);
 void set_driver_enabled(bool enabled);
 void set_mode(ControllerMode mode);
@@ -439,9 +533,12 @@ void loop() {
         } else if (g_mode == MODE_CASCADE) {
             if (POSITION_CALIBRATED && g_theta_balance_set
                     && g_invalid_count < DIST_INVALID_LIMIT && theta_valid) {
-                g_theta_trim_ff_deg = compute_position_trim_ff_deg(distance_ok);
+                g_theta_trim_ff_deg = compute_position_trim_ff_deg(distance_ok)
+                                    + compute_center_hold_trim_ff_deg(distance_ok);
                 float theta_ctrl_deg = compute_full_state_theta_command(distance_ok);
-                g_theta_cmd_prelimit_deg = theta_ctrl_deg + g_theta_trim_ff_deg;
+                float theta_ctrl_shaped_deg =
+                    shape_outer_control_command(theta_ctrl_deg, distance_ok);
+                g_theta_cmd_prelimit_deg = theta_ctrl_shaped_deg + g_theta_trim_ff_deg;
                 g_theta_cmd_rel_deg = clamp_theta_rel_command(g_theta_cmd_prelimit_deg);
                 g_theta_cmd_saturated =
                     fabs(g_theta_cmd_rel_deg - g_theta_cmd_prelimit_deg) > 0.0005f;
@@ -450,6 +547,7 @@ void loop() {
                 g_theta_trim_ff_deg = 0.0f;
                 g_theta_cmd_prelimit_deg = 0.0f;
                 g_theta_cmd_rel_deg = clamp_theta_rel_command(0.0f);
+                g_theta_ctrl_shaped_deg = 0.0f;
                 g_theta_cmd_saturated = false;
             }
             step_delta = compute_inner_step_delta(g_theta_cmd_rel_deg);
@@ -634,14 +732,16 @@ float unwrap_degrees(float wrapped_deg) {
 //  State and control helpers
 // ================================================================
 void update_derived_states(bool distance_valid, bool theta_valid) {
-    float x_now = g_d_filt_cm - g_setpoint_cm;
+    float x_now = control_distance_cm() - g_setpoint_cm;
     if (distance_valid && g_distance_seeded) {
         float d_rate = (g_d_vel_cm - g_prev_d_vel_cm) / DT;
         g_d_rate_cm_s = d_rate;
+        float x_rate = (x_now - g_prev_x_cm) / DT;
+        float target_weight = near_target_weight(x_now);
         float x_dot_alpha = X_DOT_EMA_ALPHA
                           + ((X_DOT_EMA_ALPHA_NEAR - X_DOT_EMA_ALPHA)
-                             * near_distance_weight());
-        g_x_dot_cm_s = (x_dot_alpha * d_rate)
+                             * target_weight);
+        g_x_dot_cm_s = (x_dot_alpha * x_rate)
                      + ((1.0f - x_dot_alpha) * g_x_dot_cm_s);
         g_prev_x_cm = x_now;
         g_prev_d_vel_cm = g_d_vel_cm;
@@ -669,14 +769,25 @@ float clamp_float(float value, float lo, float hi) {
     return value;
 }
 
-float near_distance_weight() {
-    float near_ref_cm = (g_d_filt_cm < g_setpoint_cm) ? g_d_filt_cm : g_setpoint_cm;
-    if (D_SETPOINT_DEFAULT_CM <= D_MIN_CM) {
+float control_distance_cm() {
+    if (DIST_CTRL_BLEND_BAND_CM <= 0.0f) {
+        return g_d_vel_cm;
+    }
+
+    float abs_fast_x_cm = fabs(g_d_vel_cm - g_setpoint_cm);
+    float fast_weight = clamp_float(abs_fast_x_cm / DIST_CTRL_BLEND_BAND_CM,
+                                    0.0f,
+                                    1.0f);
+    return g_d_filt_cm + (fast_weight * (g_d_vel_cm - g_d_filt_cm));
+}
+
+float near_target_weight(float x_cm) {
+    if (X_DOT_NEAR_TARGET_BAND_CM <= 0.0f) {
         return 0.0f;
     }
 
-    return clamp_float((D_SETPOINT_DEFAULT_CM - near_ref_cm)
-                           / (D_SETPOINT_DEFAULT_CM - D_MIN_CM),
+    return clamp_float((X_DOT_NEAR_TARGET_BAND_CM - fabs(x_cm))
+                           / X_DOT_NEAR_TARGET_BAND_CM,
                        0.0f,
                        1.0f);
 }
@@ -701,6 +812,54 @@ float clamp_theta_rel_command(float theta_rel_deg) {
     return theta_cal_cmd - g_theta_balance_deg;
 }
 
+float shape_outer_control_command(float theta_ctrl_deg, bool distance_valid) {
+    float abs_x_cm = fabs(g_x_cm);
+    float abs_x_dot_cm_s = fabs(g_x_dot_cm_s);
+    bool staircase_center_active = g_staircase_active
+                                && g_staircase_phase == STAIRCASE_PHASE_CENTER;
+    float x_weight = clamp_float((OUTER_CTRL_SOFTEN_X_CM - abs_x_cm)
+                                     / OUTER_CTRL_SOFTEN_X_CM,
+                                 0.0f,
+                                 1.0f);
+    float x_dot_weight =
+        clamp_float((OUTER_CTRL_SOFTEN_X_DOT_CM_S - abs_x_dot_cm_s)
+                        / OUTER_CTRL_SOFTEN_X_DOT_CM_S,
+                    0.0f,
+                    1.0f);
+    float near_weight = x_weight * x_dot_weight;
+
+    float softened_cmd_deg = theta_ctrl_deg
+                           * (1.0f - (OUTER_CTRL_SOFTEN_MAX_REDUCTION * near_weight));
+    float slew_deg_s = OUTER_CMD_SLEW_FAR_DEG_S
+                    - ((OUTER_CMD_SLEW_FAR_DEG_S - OUTER_CMD_SLEW_NEAR_DEG_S)
+                       * near_weight);
+    if (staircase_center_active && OUTER_CMD_SLEW_TRANSPORT_X_CM > 0.0f) {
+        float transport_weight = clamp_float(abs_x_cm / OUTER_CMD_SLEW_TRANSPORT_X_CM,
+                                             0.0f,
+                                             1.0f);
+        float transport_slew_scale = 1.0f
+                                  + (OUTER_CMD_SLEW_TRANSPORT_GAIN
+                                     * transport_weight);
+        slew_deg_s *= transport_slew_scale;
+    }
+    float max_delta_deg = slew_deg_s * DT;
+    float delta_deg = clamp_float(softened_cmd_deg - g_theta_ctrl_shaped_deg,
+                                  -max_delta_deg,
+                                   max_delta_deg);
+    g_theta_ctrl_shaped_deg += delta_deg;
+
+    bool in_hold_deadband_region =
+        abs_x_cm <= OUTER_CTRL_HOLD_X_CM
+        && abs_x_dot_cm_s <= OUTER_CTRL_HOLD_X_DOT_CM_S;
+    if (distance_valid
+            && in_hold_deadband_region
+            && fabs(g_theta_ctrl_shaped_deg) <= OUTER_CTRL_HOLD_DEADBAND_DEG) {
+        g_theta_ctrl_shaped_deg = 0.0f;
+    }
+
+    return g_theta_ctrl_shaped_deg;
+}
+
 float compute_full_state_theta_command(bool distance_valid) {
     float gain_scale = g_outer_gain_scale;
     float x_dot_ctrl = clamp_float(g_x_dot_cm_s,
@@ -713,10 +872,71 @@ float compute_full_state_theta_command(bool distance_valid) {
     float abs_x_dot_cm_s = fabs(x_dot_ctrl);
     bool positive_x_side = g_x_cm > 0.0f;
     bool moving_inward = (g_x_cm * x_dot_ctrl) < 0.0f;
+    bool center_target_active = is_center_setpoint_cm(g_setpoint_cm);
+    bool staircase_center_active = center_target_active
+                                && g_staircase_active
+                                && g_staircase_phase == STAIRCASE_PHASE_CENTER;
     float kx_scale = positive_x_side ? OUTER_POS_X_KX_SCALE : 1.0f;
     float kv_scale = positive_x_side ? OUTER_POS_X_KV_SCALE : 1.0f;
     float kx = OUTER_KX_DEFAULT * gain_scale * kx_scale;
     float kv = OUTER_KV_DEFAULT * gain_scale * kv_scale;
+    if (center_target_active) {
+        float center_capture_x_weight = 0.0f;
+        if (OUTER_CENTER_CAPTURE_X_FULL_CM > OUTER_CENTER_CAPTURE_X_ENTER_CM) {
+            center_capture_x_weight =
+                clamp_float((abs_x_cm - OUTER_CENTER_CAPTURE_X_ENTER_CM)
+                                / (OUTER_CENTER_CAPTURE_X_FULL_CM
+                                   - OUTER_CENTER_CAPTURE_X_ENTER_CM),
+                            0.0f,
+                            1.0f);
+        }
+        float center_capture_x_dot_weight = 0.0f;
+        if (OUTER_CENTER_CAPTURE_X_DOT_FULL_CM_S
+                > OUTER_CENTER_CAPTURE_X_DOT_ENTER_CM_S) {
+            center_capture_x_dot_weight =
+                clamp_float((abs_x_dot_cm_s - OUTER_CENTER_CAPTURE_X_DOT_ENTER_CM_S)
+                                / (OUTER_CENTER_CAPTURE_X_DOT_FULL_CM_S
+                                   - OUTER_CENTER_CAPTURE_X_DOT_ENTER_CM_S),
+                            0.0f,
+                            1.0f);
+        }
+        float center_capture_weight =
+            (center_capture_x_weight > center_capture_x_dot_weight)
+                ? center_capture_x_weight
+                : center_capture_x_dot_weight;
+        float center_capture_kx_scale =
+            1.0f
+            + ((OUTER_CENTER_CAPTURE_KX_SCALE_MAX - 1.0f)
+               * center_capture_weight);
+        float center_capture_kv_scale =
+            1.0f
+            + ((OUTER_CENTER_CAPTURE_KV_SCALE_MAX - 1.0f)
+               * center_capture_weight);
+        if (moving_inward) {
+            center_capture_kx_scale += OUTER_CENTER_CAPTURE_INWARD_KX_BONUS
+                                    * center_capture_weight;
+            center_capture_kv_scale = 1.0f
+                                  + ((center_capture_kv_scale - 1.0f)
+                                     * OUTER_CENTER_CAPTURE_INWARD_KV_REDUCTION);
+        }
+        kx *= center_capture_kx_scale;
+        kv *= center_capture_kv_scale;
+    }
+    if (staircase_center_active && OUTER_STAIR_CENTER_TRANSPORT_X_CM > 0.0f) {
+        float transport_weight = clamp_float(abs_x_cm / OUTER_STAIR_CENTER_TRANSPORT_X_CM,
+                                             0.0f,
+                                             1.0f);
+        float transport_kx_scale =
+            1.0f
+            + ((OUTER_STAIR_CENTER_TRANSPORT_KX_SCALE_MAX - 1.0f)
+               * transport_weight);
+        float transport_kv_scale =
+            1.0f
+            + ((OUTER_STAIR_CENTER_TRANSPORT_KV_SCALE_MAX - 1.0f)
+               * transport_weight);
+        kx *= transport_kx_scale;
+        kv *= transport_kv_scale;
+    }
     if (moving_inward) {
         float inward_brake_weight =
             clamp_float((OUTER_INWARD_DAMP_BAND_CM - abs_x_cm)
@@ -746,6 +966,40 @@ float compute_full_state_theta_command(bool distance_valid) {
               * gain_scale
               * center_inward_brake_weight;
     }
+    if (staircase_center_active
+            && moving_inward
+            && OUTER_STAIR_CENTER_SETTLE_BRAKE_BAND_CM > 0.0f) {
+        float staircase_center_brake_weight =
+            clamp_float((OUTER_STAIR_CENTER_SETTLE_BRAKE_BAND_CM - abs_x_cm)
+                            / OUTER_STAIR_CENTER_SETTLE_BRAKE_BAND_CM,
+                        0.0f,
+                        1.0f);
+        kv += OUTER_STAIR_CENTER_SETTLE_EXTRA_KV
+              * gain_scale
+              * staircase_center_brake_weight;
+    }
+    if (center_target_active
+            && OUTER_CENTER_SPEED_BRAKE_BAND_CM > 0.0f
+            && OUTER_CENTER_SPEED_BRAKE_X_DOT_FULL_CM_S
+                > OUTER_CENTER_SPEED_BRAKE_X_DOT_ENTER_CM_S
+            && abs_x_cm <= OUTER_CENTER_SPEED_BRAKE_BAND_CM
+            && abs_x_dot_cm_s >= OUTER_CENTER_SPEED_BRAKE_X_DOT_ENTER_CM_S) {
+        float center_speed_weight =
+            clamp_float((OUTER_CENTER_SPEED_BRAKE_BAND_CM - abs_x_cm)
+                            / OUTER_CENTER_SPEED_BRAKE_BAND_CM,
+                        0.0f,
+                        1.0f);
+        float center_speed_x_dot_weight =
+            clamp_float((abs_x_dot_cm_s - OUTER_CENTER_SPEED_BRAKE_X_DOT_ENTER_CM_S)
+                            / (OUTER_CENTER_SPEED_BRAKE_X_DOT_FULL_CM_S
+                               - OUTER_CENTER_SPEED_BRAKE_X_DOT_ENTER_CM_S),
+                        0.0f,
+                        1.0f);
+        kv += OUTER_CENTER_SPEED_BRAKE_EXTRA_KV
+              * gain_scale
+              * center_speed_weight
+              * center_speed_x_dot_weight;
+    }
     float kt = OUTER_KT_DEFAULT * gain_scale;
     float kw = OUTER_KW_DEFAULT * gain_scale;
     float ki = OUTER_KI_DEFAULT * gain_scale;
@@ -753,13 +1007,25 @@ float compute_full_state_theta_command(bool distance_valid) {
     moving_inward = recovery_state_observable && moving_inward;
     bool in_capture_band = abs_x_cm <= OUTER_INTEGRAL_CAPTURE_CM
                         && abs_x_dot_cm_s <= OUTER_INTEGRAL_CAPTURE_X_DOT_CM_S;
-    bool in_integrate_band = abs_x_cm <= OUTER_INTEGRAL_ACCUM_CM
-                          && abs_x_dot_cm_s <= OUTER_INTEGRAL_ACCUM_X_DOT_CM_S;
+    float integrate_x_cm_limit = center_target_active
+                              ? OUTER_CENTER_INTEGRAL_ACCUM_CM
+                              : OUTER_INTEGRAL_ACCUM_CM;
+    float integrate_x_dot_cm_s_limit = center_target_active
+                                    ? OUTER_CENTER_INTEGRAL_ACCUM_X_DOT_CM_S
+                                    : OUTER_INTEGRAL_ACCUM_X_DOT_CM_S;
+    bool in_integrate_band = abs_x_cm <= integrate_x_cm_limit
+                          && abs_x_dot_cm_s <= integrate_x_dot_cm_s_limit;
     bool in_center_band = abs_x_cm <= OUTER_CENTER_BAND_CM
                        && abs_x_dot_cm_s <= OUTER_CENTER_BAND_X_DOT_CM_S;
+    float recovery_enter_x_cm = center_target_active
+                              ? RECOVERY_CENTER_ENTER_X_CM
+                              : RECOVERY_ENTER_X_CM;
+    float recovery_enter_x_dot_cm_s = center_target_active
+                                    ? RECOVERY_CENTER_ENTER_X_DOT_CM_S
+                                    : RECOVERY_ENTER_X_DOT_CM_S;
     bool stalled_off_center = recovery_state_observable
-                           && abs_x_cm >= RECOVERY_ENTER_X_CM
-                           && abs_x_dot_cm_s <= RECOVERY_ENTER_X_DOT_CM_S;
+                           && abs_x_cm >= recovery_enter_x_cm
+                           && abs_x_dot_cm_s <= recovery_enter_x_dot_cm_s;
 
     bool recovery_handoff_ready = moving_inward
                                && abs_x_cm <= RECOVERY_EXIT_HANDOFF_X_CM
@@ -794,7 +1060,13 @@ float compute_full_state_theta_command(bool distance_valid) {
     }
     if (g_x_cm != 0.0f && g_outer_xi_cm_s != 0.0f
             && (g_x_cm * g_outer_xi_cm_s) < 0.0f) {
-        g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_WRONG_SIGN;
+        float wrong_sign_bleed = OUTER_INTEGRAL_BLEED_WRONG_SIGN;
+        if (center_target_active
+                && abs_x_cm <= OUTER_WRONG_SIGN_CENTER_X_CM
+                && abs_x_dot_cm_s <= OUTER_WRONG_SIGN_CENTER_X_DOT_CM_S) {
+            wrong_sign_bleed = OUTER_INTEGRAL_BLEED_WRONG_SIGN_CENTER;
+        }
+        g_outer_xi_cm_s *= wrong_sign_bleed;
     }
     if (in_center_band) {
         g_outer_xi_cm_s *= OUTER_INTEGRAL_BLEED_CENTER;
@@ -852,6 +1124,30 @@ float compute_full_state_theta_command(bool distance_valid) {
                                        g_theta_cmd_limit_deg);
     }
 
+    bool center_bias_update_ready = center_target_active
+                                 && distance_valid
+                                 && !g_recovery_active
+                                 && (in_capture_band || in_integrate_band);
+    if (center_bias_update_ready) {
+        float center_bias_sample_cm_s = g_outer_xi_cm_s;
+        if (g_zero_trim_est_valid && ki > 0.0001f) {
+            center_bias_sample_cm_s = g_zero_trim_est_deg / ki;
+        }
+        if (ki > 0.0001f) {
+            float center_bias_limit_cm_s = OUTER_CENTER_BIAS_MEMORY_MAX_DEG / ki;
+            center_bias_sample_cm_s = clamp_float(center_bias_sample_cm_s,
+                                                  -center_bias_limit_cm_s,
+                                                   center_bias_limit_cm_s);
+        }
+        if (!g_center_bias_xi_valid) {
+            g_center_bias_xi_valid = true;
+            g_center_bias_xi_cm_s = center_bias_sample_cm_s;
+        } else {
+            g_center_bias_xi_cm_s += OUTER_CENTER_BIAS_MEMORY_ALPHA
+                                  * (center_bias_sample_cm_s - g_center_bias_xi_cm_s);
+        }
+    }
+
     float recovery_floor_scale = positive_x_side
                                ? OUTER_POS_X_RECOVERY_SCALE
                                : 1.0f;
@@ -896,19 +1192,28 @@ void reset_zero_trim_estimator() {
     g_zero_trim_est_count = 0;
 }
 
+void reset_center_bias_memory() {
+    g_center_bias_xi_valid = false;
+    g_center_bias_xi_cm_s = 0.0f;
+}
+
 void update_zero_trim_estimator(bool distance_valid, bool theta_valid) {
     float theta_track_err_deg = g_theta_cmd_rel_deg - g_theta_rel_deg;
+    bool center_target_active = is_center_setpoint_cm(g_setpoint_cm);
     bool can_sample = (g_mode == MODE_CASCADE)
+                   && center_target_active
                    && g_driver_enabled
                    && distance_valid
                    && theta_valid
                    && g_theta_balance_set
                    && !g_recovery_active
-                   && (fabs(g_x_cm) <= ZERO_TRIM_EST_X_CM)
-                   && (fabs(g_x_dot_cm_s) <= ZERO_TRIM_EST_X_DOT_CM_S)
+                   && (fabs(g_x_cm) <= ZERO_TRIM_EST_CENTER_X_CM)
+                   && (fabs(g_x_dot_cm_s) <= ZERO_TRIM_EST_CENTER_X_DOT_CM_S)
                    && (fabs(theta_track_err_deg)
-                       <= ZERO_TRIM_EST_THETA_TRACK_ERR_DEG)
-                   && (fabs(g_theta_dot_deg_s) <= ZERO_TRIM_EST_THETA_DOT_DEG_S);
+                       <= ZERO_TRIM_EST_CENTER_THETA_TRACK_ERR_DEG)
+                   && (fabs(g_theta_dot_deg_s)
+                       <= ZERO_TRIM_EST_CENTER_THETA_DOT_DEG_S)
+                   && (fabs(g_theta_fs_cmd_deg) <= ZERO_TRIM_EST_CENTER_FS_CMD_DEG);
     if (!can_sample) {
         return;
     }
@@ -937,7 +1242,7 @@ void reset_position_trim_map() {
 }
 
 bool position_trim_enabled_for_setpoint_cm(float cm) {
-    return cm >= POSITION_TRIM_ENABLE_MIN_CM;
+    return cm >= POSITION_TRIM_ENABLE_MIN_CM && !is_center_setpoint_cm(cm);
 }
 
 uint8_t position_trim_bin_from_cm(float cm) {
@@ -1035,6 +1340,42 @@ float compute_position_trim_ff_deg(bool distance_valid) {
                     1.0f);
     float trim_weight = (x_weight < x_dot_weight) ? x_weight : x_dot_weight;
     return trim_deg * trim_weight;
+}
+
+float compute_center_hold_trim_ff_deg(bool distance_valid) {
+    if (!distance_valid || !is_center_setpoint_cm(g_setpoint_cm)) {
+        return 0.0f;
+    }
+
+    float trim_deg = 0.0f;
+    if (g_zero_trim_est_valid
+            && g_zero_trim_est_count >= CENTER_HOLD_TRIM_MIN_COUNT) {
+        trim_deg = g_zero_trim_est_deg;
+    } else if (g_center_bias_xi_valid) {
+        trim_deg = OUTER_KI_DEFAULT * g_center_bias_xi_cm_s;
+    }
+    if (trim_deg == 0.0f) {
+        return 0.0f;
+    }
+
+    trim_deg = clamp_float(trim_deg,
+                           -CENTER_HOLD_TRIM_MAX_ABS_DEG,
+                            CENTER_HOLD_TRIM_MAX_ABS_DEG);
+    float x_weight = clamp_float((CENTER_HOLD_TRIM_APPLY_X_CM - fabs(g_x_cm))
+                                     / CENTER_HOLD_TRIM_APPLY_X_CM,
+                                 0.0f,
+                                 1.0f);
+    float x_dot_weight =
+        clamp_float((CENTER_HOLD_TRIM_APPLY_X_DOT_CM_S - fabs(g_x_dot_cm_s))
+                        / CENTER_HOLD_TRIM_APPLY_X_DOT_CM_S,
+                    0.0f,
+                    1.0f);
+    float trim_weight = (x_weight < x_dot_weight) ? x_weight : x_dot_weight;
+    return trim_deg * trim_weight;
+}
+
+bool is_center_setpoint_cm(float cm) {
+    return fabs(cm - STAIRCASE_CENTER_SETPOINT_CM) <= CENTER_SETPOINT_TOL_CM;
 }
 
 void update_position_trim_map(bool distance_valid, bool theta_valid) {
@@ -1184,6 +1525,7 @@ void set_driver_enabled(bool enabled) {
 void apply_setpoint_cm(float sp) {
     g_setpoint_cm = sp;
     reset_zero_trim_estimator();
+    reset_center_bias_memory();
     reset_dynamic_state();
 }
 
@@ -1191,13 +1533,16 @@ void apply_staircase_setpoint_cm(float sp) {
     float prev_setpoint_cm = g_setpoint_cm;
 
     g_setpoint_cm = sp;
-    reset_zero_trim_estimator();
 
-    // Keep the physical motion estimate coherent across staircase jumps, but
-    // clear learned bias terms tied to the old target.
-    g_x_cm = g_d_filt_cm - g_setpoint_cm;
+    // Keep the physical motion estimate coherent across staircase jumps. Most
+    // target-specific dynamic state is cleared, but large inward steps still
+    // pre-arm recovery so center return does not wait for the generic stall
+    // detector to rediscover a known transport condition.
+    g_x_cm = control_distance_cm() - g_setpoint_cm;
     g_prev_x_cm = g_x_cm;
     g_prev_d_vel_cm = g_d_vel_cm;
+    g_x_dot_cm_s = 0.0f;
+    g_d_rate_cm_s = 0.0f;
     g_theta_rel_deg = g_theta_cal_deg - g_theta_balance_deg;
     g_prev_theta_rel_deg = g_theta_rel_deg;
     g_theta_dot_deg_s = 0.0f;
@@ -1205,6 +1550,7 @@ void apply_staircase_setpoint_cm(float sp) {
     g_theta_trim_ff_deg = 0.0f;
     g_theta_cmd_prelimit_deg = 0.0f;
     g_theta_cmd_rel_deg = 0.0f;
+    g_theta_ctrl_shaped_deg = 0.0f;
     g_theta_cmd_saturated = false;
     g_outer_xi_cm_s = 0.0f;
     g_inner_step_residual = 0.0f;
@@ -1214,7 +1560,9 @@ void apply_staircase_setpoint_cm(float sp) {
     bool inward_step = g_setpoint_cm < prev_setpoint_cm;
     bool large_step = setpoint_step_cm >= SETPOINT_STEP_PREARM_MIN_CM;
     bool far_from_new_target = fabs(g_x_cm) >= RECOVERY_ENTER_X_CM;
-    g_recovery_active = inward_step && large_step && far_from_new_target;
+    g_recovery_active = inward_step
+                     && large_step
+                     && far_from_new_target;
     g_recovery_enter_counter = g_recovery_active ? RECOVERY_ENTER_COUNT : 0;
     g_recovery_floor_active_deg = g_recovery_floor_deg;
 }
@@ -1336,7 +1684,7 @@ void set_mode(ControllerMode mode) {
 }
 
 void reset_dynamic_state() {
-    g_x_cm = g_d_filt_cm - g_setpoint_cm;
+    g_x_cm = control_distance_cm() - g_setpoint_cm;
     g_prev_x_cm = g_x_cm;
     g_prev_d_vel_cm = g_d_vel_cm;
     g_x_dot_cm_s = 0.0f;
@@ -1348,8 +1696,10 @@ void reset_dynamic_state() {
     g_theta_trim_ff_deg = 0.0f;
     g_theta_cmd_prelimit_deg = 0.0f;
     g_theta_cmd_rel_deg = 0.0f;
+    g_theta_ctrl_shaped_deg = 0.0f;
     g_theta_cmd_saturated = false;
     g_outer_xi_cm_s = 0.0f;
+    reset_center_bias_memory();
     g_recovery_active = false;
     g_recovery_enter_counter = 0;
     g_recovery_floor_active_deg = g_recovery_floor_deg;
@@ -1664,7 +2014,10 @@ void print_config() {
     Serial.print(DIST_EMA_ALPHA, 3); Serial.print(F(", "));
     Serial.print(DIST_VEL_EMA_ALPHA, 3); Serial.print(F(", "));
     Serial.print(X_DOT_EMA_ALPHA, 3); Serial.print(F(" -> "));
-    Serial.println(X_DOT_EMA_ALPHA_NEAR, 3);
+    Serial.print(X_DOT_EMA_ALPHA_NEAR, 3);
+    Serial.print(F(" inside |x| <= "));
+    Serial.print(X_DOT_NEAR_TARGET_BAND_CM, 2);
+    Serial.println(F(" cm"));
     Serial.print(F("# position-trim bins/max/capture/alpha = "));
     Serial.print(POSITION_TRIM_BIN_COUNT); Serial.print(F(", "));
     Serial.print(POSITION_TRIM_MAX_ABS_DEG, 3); Serial.print(F(", "));
@@ -1683,6 +2036,23 @@ void print_config() {
     Serial.println(F(" cm"));
     Serial.print(F("# full-state gain scale = "));
     Serial.println(g_outer_gain_scale, 3);
+    Serial.print(F("# outer command shaping soften |x|/|x_dot| <= "));
+    Serial.print(OUTER_CTRL_SOFTEN_X_CM, 2);
+    Serial.print(F(" cm / "));
+    Serial.print(OUTER_CTRL_SOFTEN_X_DOT_CM_S, 2);
+    Serial.print(F(" cm/s, reduction = "));
+    Serial.print(OUTER_CTRL_SOFTEN_MAX_REDUCTION, 3);
+    Serial.print(F(", slew near/far = "));
+    Serial.print(OUTER_CMD_SLEW_NEAR_DEG_S, 2);
+    Serial.print(F(" / "));
+    Serial.print(OUTER_CMD_SLEW_FAR_DEG_S, 2);
+    Serial.print(F(" deg/s, transport x/gain = "));
+    Serial.print(OUTER_CMD_SLEW_TRANSPORT_X_CM, 2);
+    Serial.print(F(" cm / "));
+    Serial.print(OUTER_CMD_SLEW_TRANSPORT_GAIN, 3);
+    Serial.print(F(", hold deadband = "));
+    Serial.print(OUTER_CTRL_HOLD_DEADBAND_DEG, 3);
+    Serial.println(F(" deg"));
     Serial.print(F("# integral output clamp = +/-"));
     Serial.print(OUTER_INTEGRAL_CLAMP_DEG, 3);
     Serial.println(F(" deg"));
@@ -1696,6 +2066,20 @@ void print_config() {
     Serial.print(F(" cm / "));
     Serial.print(OUTER_INTEGRAL_ACCUM_X_DOT_CM_S, 2);
     Serial.println(F(" cm/s"));
+    Serial.print(F("# center integral accumulate |x|/|x_dot| <= "));
+    Serial.print(OUTER_CENTER_INTEGRAL_ACCUM_CM, 2);
+    Serial.print(F(" cm / "));
+    Serial.print(OUTER_CENTER_INTEGRAL_ACCUM_X_DOT_CM_S, 2);
+    Serial.println(F(" cm/s"));
+    Serial.print(F("# center hold trim max/apply |x|/|x_dot| = "));
+    Serial.print(CENTER_HOLD_TRIM_MAX_ABS_DEG, 3); Serial.print(F(" deg, "));
+    Serial.print(CENTER_HOLD_TRIM_APPLY_X_CM, 2); Serial.print(F(" cm / "));
+    Serial.print(CENTER_HOLD_TRIM_APPLY_X_DOT_CM_S, 2);
+    Serial.println(F(" cm/s"));
+    Serial.print(F("# zero-trim center gate = "));
+    Serial.print(ZERO_TRIM_EST_CENTER_X_CM, 2); Serial.print(F(" cm, "));
+    Serial.print(ZERO_TRIM_EST_CENTER_X_DOT_CM_S, 2); Serial.print(F(" cm/s, "));
+    Serial.println(ZERO_TRIM_EST_CENTER_FS_CMD_DEG, 3);
     Serial.print(F("# recovery floor base/max/gain = "));
     Serial.print(g_recovery_floor_deg, 3);
     Serial.print(F(", "));
