@@ -1,0 +1,18 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {2.1}{\ignorespaces Simplified ball and beam geometry used throughout the report. Positive ball position is measured away from the pivot; positive analytical beam angle raises the motor side.}}{3}{figure.caption.4}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {5.1}{\ignorespaces Implementation-oriented cascaded control structure used by the April 11 telemetry run.}}{14}{figure.caption.7}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {6.1}{\ignorespaces Forward and reverse beam-angle calibration curves generated directly from the combined calibration CSV. The overlaid affine line is the runtime mapping used in the controller.}}{18}{figure.caption.9}%
+\contentsline {figure}{\numberline {6.2}{\ignorespaces Direction-dependent hysteresis, plotted as reverse minus forward beam angle versus unwrapped AS5600 angle.}}{19}{figure.caption.10}%
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {7.1}{\ignorespaces Phase-by-phase overview of the staircase experiment. Each panel uses a local time axis and its own vertical scale so the hold portions remain readable. The bold red curve is a display-smoothed version of the valid measured signal, while the faint raw trace shows the underlying sensor fluctuation.}}{22}{figure.caption.13}%
+\contentsline {figure}{\numberline {7.2}{\ignorespaces Reference tracking by commanded transition. The left column shows the first \SI {8}{s} after each setpoint change, while the right column zooms into the late hold portion of the same segment.}}{23}{figure.caption.14}%
+\contentsline {figure}{\numberline {7.3}{\ignorespaces Late-hold tracking error $x_{\text {cm}} = d_{\text {filt,cm}} - d_{\text {setpoint,cm}}$ for each commanded transition. Dashed lines show the default settling band used in the summary metrics, while the bold curve uses the same display-only smoothing as the position plots.}}{24}{figure.caption.15}%
+\contentsline {figure}{\numberline {7.4}{\ignorespaces Measured beam angle versus time during the staircase experiment.}}{25}{figure.caption.16}%
+\contentsline {figure}{\numberline {7.5}{\ignorespaces Final relative beam-angle command sent to the inner loop.}}{25}{figure.caption.17}%
+\contentsline {figure}{\numberline {7.6}{\ignorespaces Ball velocity and beam-angle rate estimates derived from the logged telemetry.}}{26}{figure.caption.18}%
+\addvspace {10\p@ }

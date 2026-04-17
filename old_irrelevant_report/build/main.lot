@@ -1,0 +1,15 @@
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {2.1}{\ignorespaces Measured hardware parameters taken from the canonical modeling record.}}{4}{table.caption.5}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {4.1}{\ignorespaces Numerically specialized parameters around the nominal operating point.}}{12}{table.caption.6}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {5.1}{\ignorespaces Key runtime constants from the firmware implementation in \texttt {src/main.cpp}.}}{16}{table.5.1}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {6.1}{\ignorespaces Summary statistics generated directly from the combined calibration CSV.}}{18}{table.caption.8}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {7.1}{\ignorespaces Signal mapping assumptions used by the analysis pipeline.}}{21}{table.caption.11}%
+\contentsline {table}{\numberline {7.2}{\ignorespaces Run-level summary generated from the telemetry CSV.}}{21}{table.caption.12}%
+\contentsline {table}{\numberline {7.3}{\ignorespaces Per-step tracking metrics computed from valid closed-loop samples. Settling uses the default band $\max (\SI {0.2}{cm}, 5\%$ of commanded step size$)$. Unsupported metrics remain \texttt {N/A}.}}{26}{table.caption.19}%
+\addvspace {10\p@ }
