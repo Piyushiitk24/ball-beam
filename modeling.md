@@ -51,12 +51,12 @@ Sections 3-8 use the physical small-angle convention from Table 1:
   `r` decreases.
 
 The firmware in `src/main.cpp` does not control this analytical angle directly. It uses
-the calibrated runtime coordinates
+the runtime coordinates
 
 ```text
-theta_cal_deg = 0.07666806 * as5600_unwrapped_deg - 23.28443907
-theta_rel_deg = theta_cal_deg - theta_balance_deg
-x_cm          = d_vel_cm - setpoint_cm
+theta_cal_deg = 0.07528848 * (as5600_unwrapped_deg - 302.74105)
+theta_rel_deg = theta_cal_deg - 0.94660
+x_cm          = d_filt_cm - setpoint_cm
 ```
 
 with the empirically verified sign audit:
@@ -146,9 +146,11 @@ I = (2/3) × 0.0028 × (0.020)²
 | -------- | --------- | ------- | ------ |
 | N_steps | 200 × 16 | 3200 | microsteps/rev |
 | k_AS | 360 / 4096 | 0.087890625 | AS5600-deg/count |
-| k_θ | signed AS5600-to-beam affine fit slope | 0.07666806 | beam-deg/AS5600-deg |
-| b_θ | signed AS5600-to-beam affine fit intercept | -23.28443907 | beam-deg |
-| steps_per_beam_deg | (3200 / 360) / k_θ | 115.9399 | microsteps/beam-deg |
+| a_min | committed AS5600 operating endpoint | 293.44348 | AS5600-deg |
+| a_max | committed AS5600 operating endpoint | 343.91601 | AS5600-deg |
+| k_θ,lin | (3.10 - (-0.70)) / (343.91601 - 293.44348) | 0.07528848 | beam-deg/AS5600-deg |
+| a_θ0 | 293.44348 - (-0.70) / k_θ,lin | 302.74105 | AS5600-deg |
+| steps_per_beam_deg | (3200 / 360) / k_θ,lin | 118.0644 | microsteps/beam-deg |
 | center_d | (44.0 mm + 126.6 mm) / 2 | 0.0853 | m |
 | r₀ | x_sensor_face + center_d | 0.1256 | m |
 
@@ -707,9 +709,9 @@ Important implementation meanings are:
   manual command `A+` roll the ball toward the motor/far end.
 - `valid = distance_ok && theta_valid` is the combined telemetry health flag used in
   the CSV logs.
-- `theta_balance_deg` is not part of the April 7 calibration fit. It is captured later
-  on the assembled system by the `Z` command so that `theta_rel_deg = 0` represents the
-  chosen balance reference for control.
+- `theta_balance_deg` is not part of the April 7 endpoint data. The main firmware applies
+  the fixed value `THETA_BALANCE_FIXED_DEG = 0.94660` at boot so that `theta_rel_deg = 0`
+  represents the chosen balance reference for control.
 
 ### 9.2 Sharp Distance Measurement and Filtering
 
@@ -777,15 +779,26 @@ The calibration procedure was:
 - At each capture point, average `64` AS5600 raw samples and record the external beam
   angle from an iPhone level app taped cross-sectionally to the beam.
 
-The controller uses the signed same-session affine fit
+The current firmware uses a zero-centered linear map anchored to the committed endpoint
+data:
 
 ```text
-theta_cal_deg = 0.07666806 * as5600_unwrapped_deg - 23.28443907
-theta_rel_deg = theta_cal_deg - theta_balance_deg
+AS5600_LINEAR_MIN_DEG  = 293.44348
+AS5600_LINEAR_MAX_DEG  = 343.91601
+THETA_LINEAR_MIN_DEG   = -0.70
+THETA_LINEAR_MAX_DEG   =  3.10
+THETA_LINEAR_DEG_PER_AS_DEG = (3.10 - (-0.70)) / (343.91601 - 293.44348)
+                            = 0.07528848
+AS5600_LINEAR_ZERO_DEG = 293.44348 - (-0.70) / 0.07528848
+                       = 302.74105
+
+theta_cal_deg = 0.07528848 * (as5600_unwrapped_deg - 302.74105)
+theta_rel_deg = theta_cal_deg - 0.94660
 ```
 
-This affine fit was chosen for online control because it is simple and already accurate
-enough over the tested range. The measured calibrated range used by `main.cpp` is
+This online map intentionally ignores the affine intercept from the April 7 regression and
+instead uses the current operating boundary directly. The measured calibrated range used by
+`main.cpp` is
 
 ```text
 THETA_CAL_MIN_DEG         = -0.70
@@ -800,7 +813,7 @@ theta_soft_max =  3.10 - 0.10 + 0.30 =  3.30 deg
 The corresponding actuator conversion used online is empirical rather than geometric:
 
 ```text
-STEPS_PER_BEAM_DEG = (3200 / 360) / 0.07666806 = 115.9399219 microsteps/deg
+STEPS_PER_BEAM_DEG = (3200 / 360) / 0.07528848 = 118.0643977 microsteps/deg
 ```
 
 The same-session signed fit quality reported in
@@ -841,9 +854,9 @@ Representative LUT knots from the April 7, 2026 report are:
 | 343.91601 | 3.100000 |
 | 344.21817 | 3.100000 |
 
-The firmware currently uses the affine fit online. The nonlinear LUT is the thesis
-record of the measured nonlinearity and should be preferred for offline plots or for a
-future controller revision that needs the most faithful static mapping.
+The earlier affine fit remains a useful historical reference for telemetry analysis, while
+the nonlinear LUT remains the thesis record of measured static nonlinearity. The current
+firmware uses the endpoint-based linear map online.
 
 ### 9.4 Implemented Operating Modes
 
@@ -853,16 +866,17 @@ The controller in `main.cpp` has three staged modes:
 - `M1`: manual beam-angle hold using the AS5600 inner loop only. Command `A<deg>` sets
   `g_manual_theta_cmd_rel_deg`.
 - `M2`: cascaded ball-position control. This mode is allowed only when
-  `POSITION_CALIBRATED = true` and `theta_balance_set = true`.
+  `POSITION_CALIBRATED = true`.
 
 Additional runtime facts from the implementation are:
 
 - Boot mode is always `M0`.
 - The TMC2209 driver remains disabled until `G` is received.
+- A fixed balance trim `THETA_BALANCE_FIXED_DEG = 0.94660` is applied automatically at
+  boot, so `theta_balance_set = true` from startup onward.
 - `X` disables the driver and resets dynamic controller state.
-- `Z` sets `theta_balance_deg = theta_cal_deg`, marks `theta_balance_set = true`, and
-  clears both trim estimators.
 - `S<cm>` updates the setpoint if `4.40 <= S <= 12.66`.
+- Runtime zeroing commands `B` and `Z` are removed from the main firmware.
 - The `C` command in `main.cpp` only toggles Sharp calibration telemetry; it is not the
   dedicated beam-angle calibration workflow from `src/calibration_main.cpp`.
 
@@ -1271,9 +1285,9 @@ The most important telemetry columns for later thesis analysis are:
 | Sharp fit | `SHARP_ADC_SAMPLES`, `SHARP_FIT_K_V_CM`, `SHARP_FIT_OFFSET_CM`, `SHARP_MIN_VALID_V` | `8`, `12.25`, `-0.62`, `0.08 V` | Distance acquisition and inverse-voltage calibration |
 | Distance window | `D_MIN_CM`, `D_MAX_CM`, `D_SETPOINT_DEFAULT_CM` | `4.40`, `12.66`, `8.53 cm` | Valid operating range and default center setpoint |
 | Distance filtering | `DIST_EMA_ALPHA`, `DIST_VEL_EMA_ALPHA`, `X_DOT_EMA_ALPHA`, `X_DOT_EMA_ALPHA_NEAR`, `DIST_INVALID_LIMIT` | `0.25`, `0.78`, `0.20`, `0.40`, `8` | Slow telemetry distance filter, faster control distance filter, velocity filtering, and fault threshold |
-| Angle calibration | `AS5600_RAW_TO_DEG`, `THETA_SLOPE_DEG_PER_AS_DEG`, `THETA_OFFSET_DEG`, `THETA_DOT_EMA_ALPHA` | `360/4096`, `0.07666806`, `-23.28443907`, `0.30` | AS5600 conversion and affine beam-angle fit |
+| Angle calibration | `AS5600_RAW_TO_DEG`, `AS5600_LINEAR_MIN_DEG`, `AS5600_LINEAR_MAX_DEG`, `THETA_LINEAR_DEG_PER_AS_DEG`, `AS5600_LINEAR_ZERO_DEG`, `THETA_DOT_EMA_ALPHA` | `360/4096`, `293.44348`, `343.91601`, `0.07528848`, `302.74105`, `0.30` | AS5600 conversion and endpoint-based linear beam-angle fit |
 | Angle safety window | `THETA_CAL_MIN_DEG`, `THETA_CAL_MAX_DEG`, `THETA_CAL_MARGIN_DEG`, `THETA_CAL_EXTRAPOLATE_DEG` | `-0.70`, `3.10`, `0.10`, `0.30 deg` | Soft commandable beam-angle envelope `[-0.90, 3.30] deg` |
-| Stepper conversion | `STEPS_PER_REV`, `STEPS_PER_BEAM_DEG`, `DIR_SIGN`, `INNER_STEP_SIGN` | `3200`, `115.9399219`, `-1`, `-1` | Empirical stepper-to-beam conversion and sign chain |
+| Stepper conversion | `STEPS_PER_REV`, `STEPS_PER_BEAM_DEG`, `DIR_SIGN`, `INNER_STEP_SIGN` | `3200`, `118.0643977`, `-1`, `-1` | Empirical stepper-to-beam conversion and sign chain |
 | Inner servo | `INNER_KP_THETA`, `INNER_KD_THETA`, `INNER_THETA_DEADBAND_DEG`, `INNER_THETA_RATE_DEADBAND_DEG_S`, `INNER_MAX_STEP_DELTA` | `0.70`, `0.00`, `0.040`, `0.60`, `40` | Discrete P angle servo, deadband, and step clamp |
 | Step timing | `STEP_PERIOD_US`, `STEP_START_PERIOD_US`, `STEP_RAMP_STEPS`, `STEP_PULSE_US`, `DIR_REVERSE_SETTLE_US` | `200`, `900`, `16`, `5`, `1200 us` | Step pulse generation and reversal settling |
 | Command limits | `THETA_CMD_LIMIT_DEFAULT_DEG`, `OUTER_GAIN_SCALE_MIN/MAX` | `2.00 deg`, `0.50` to `1.50` | Default command cap and outer-loop gain-scaling range |

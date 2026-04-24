@@ -1,2 +1,0 @@
-phase,command,sweep_dir,sweep_index,t_ms,rel_steps,as5600_raw_mean,as5600_raw_std,as5600_deg_wrapped,as5600_deg_unwrapped,iphone_theta_deg,driver_enabled,forward_sign,lower_valid,upper_valid
-endpoint,L,endpoint,0,55735,0,4001.0,0.0,351.65039,351.65039,3.6,1,-1,1,0
