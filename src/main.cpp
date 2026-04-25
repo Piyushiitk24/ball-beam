@@ -1,29 +1,31 @@
 // =============================================================================
-// Ball-and-Beam Controller  —  clean rebuild, rev 3
+// Ball-and-Beam Controller - clean rebuild, rev 4
 // -----------------------------------------------------------------------------
-// Changes from rev 2:
-//   [t] Telemetry header emitted as plain CSV (no "# CSV: " prefix) so the
-//       Python monitor's `t_ms,` header detector actually matches.
-//       In rev 1/rev 2 the "#" prefix caused Python to skip the header,
-//       which silently dropped every subsequent data row from telemetry.csv.
-//   [t] Added columns:
-//         adc_mean, adc_volts     — Sharp IR voltage diagnostics
-//         theta_err               — stepper open-loop tracking error
-//         step_target             — AccelStepper's current target (for
-//                                   motion-cancel verification in M0/X)
+// Current control architecture:
+//   Sharp IR distance -> light position smoothing -> alpha-beta observer.
+//   The observer estimates:
+//     x_hat_cm    = ball position error relative to setpoint
+//     v_hat_cm_s  = ball velocity estimate
+//
+//   M2 uses observer position control with gated I-trim:
+//     theta_cmd_rel =
+//       outer_sign * (Kp*x_hat + Kd*v_hat + Ki*xi)   clamped
+//
+//   The integral term is deliberately small and gated.  It trims final static
+//   offset only when the ball is near the setpoint and nearly stopped.
+//
+//   Stepper tracks theta_cmd_rel open-loop (step count <-> beam degrees).
+//   AS5600 is used for telemetry, step-counter anchoring at boot/G, and
+//   verification. It is not in the inner control loop.
 // -----------------------------------------------------------------------------
-// Changes from rev 1 (in response to review):
-//   [1] M0 and X now explicitly cancel AccelStepper's pending target.
-//       G re-anchors the step counter to AS5600 before enabling, in case
-//       the beam drifted while the driver was disabled.
-//   [2] STEP_SIGN constant separates direction polarity from magnitude.
-//       Flip to -1 if Phase 1 shows commanded and measured angle oppose.
-//   [3] Baseline gains reduced: Kp 0.60→0.30, Kd 0.45→0.35.
-//       Closed-loop ωn ≈ 1.73 rad/s, ζ ≈ 1.01 (slightly overdamped).
-//   [4] Light EMA on x_dot (ALPHA_XDOT = 0.5) to suppress derivative noise
-//       from Sharp sensor jitter, without adding much phase lag.
-//   [6] M1 renamed "manual open-loop angle command" — it is NOT closed-loop
-//       on AS5600, only commands stepper position; AS5600 is telemetry.
+// Operating modes / serial protocol:
+//   M0 idle
+//   M1 manual open-loop beam angle command
+//   M2 observer position control with gated I-trim
+//   G  enable driver and re-anchor step counter to AS5600
+//   X  safe stop: enter M0, cancel motion, reset observer/integrator, disable
+//      driver
+//   E  run a 60 s setpoint staircase: far -> center -> near, 20 s each
 // -----------------------------------------------------------------------------
 // Hardware:
 //   - Arduino Nano (ATmega328P @ 16 MHz)
@@ -35,21 +37,14 @@
 //       STEP=D2, DIR=D3, EN=D4 (active-LOW enable)
 //       1/16 microstepping, driven non-blocking via AccelStepper
 // -----------------------------------------------------------------------------
-// Architecture:
-//   Single-loop PD controller on filtered ball position.
-//     theta_cmd_rel = outer_sign * (Kp * x  +  Kd * xdot_filt)   clamped.
-//   Stepper tracks theta_cmd_rel open-loop (step count ↔ beam degrees).
-//   AS5600 is telemetry, step-counter anchoring at boot/G, and safety only.
-//   NOT in the control path.
-// -----------------------------------------------------------------------------
-// Sign conventions (established empirically in prior work — do not flip):
+// Sign conventions (established empirically in prior work - do not flip):
 //   x_cm           = d_filt_cm  -  setpoint_cm
-//                    (positive x ⇒ ball is FARTHER from sensor than setpoint)
+//                    (positive x => ball is FARTHER from sensor than setpoint)
 //   theta_rel_deg  = beam angle relative to physical horizontal
-//                    (positive theta_rel ⇒ ball accelerates in +x direction,
-//                     xddot ≈ +k * theta_rel  with k ≈ 10 cm/s² / deg)
-//   outer_sign     = -1  ⇒  positive x produces negative theta_rel command.
-//   STEP_SIGN      = +1  IF positive step counter → positive beam angle.
+//                    (positive theta_rel => ball accelerates in +x direction,
+//                     xddot ~= +k * theta_rel  with k ~= 10 cm/s^2 / deg)
+//   outer_sign     = -1  => positive x produces negative theta_rel command.
+//   STEP_SIGN      = +1  IF positive step counter -> positive beam angle.
 //                    If wiring/linkage inverts this, flip to -1.
 // =============================================================================
 
@@ -98,14 +93,20 @@ static AccelStepper   stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 // ------------------- controller ----------------------------------------------
 // Rev 4 direction:
-//   Moderate Kp, real damping from observer-estimated velocity,
-//   and a small clamped integral term for slow/static offset removal.
-static float Kp_base        = 0.40f;    // deg / cm
-static float Kd_base        = 0.28f;    // deg / (cm/s)
-static float Ki_base        = 0.00f;    // deg / (cm*s)
+//   Observer-PD for main behavior, with a small integral trim only for final
+//   static offset removal.
+static float Kp_base        = 0.55f;    // deg / cm
+static float Kd_base        = 0.33f;    // deg / (cm/s)
+static float Ki_base        = 0.02f;    // deg / (cm*s)
 static float K_scale        = 1.0f;
 static float outer_sign     = -1.0f;
 static float setpoint_cm    = 10.00f;
+
+// Built-in setpoint staircase for repeatable response tests.
+static const float    STAIR_FAR_CM     = 12.50f;
+static const float    STAIR_CENTER_CM  = 10.00f;
+static const float    STAIR_NEAR_CM    = 7.50f;
+static const uint32_t STAIR_STAGE_MS   = 20000UL;
 
 static const float THETA_MAX_DEG = 4.0f;
 
@@ -120,11 +121,13 @@ static const float OBS_BETA      = 0.08f;
 
 // Integral term is only for slow/static offset.
 // Units: cm*s.  Ki * XI_LIMIT ≈ max integral contribution in degrees.
-static const float XI_LIMIT_CM_S = 18.0f;
+// Keep this trim small; the previous 0.9 deg limit produced bias.
+static const float XI_LIMIT_CM_S = 10.0f;
 
-// Only integrate when ball is not moving fast.
-// This prevents integral wind-up during limit cycles.
-static const float I_ENABLE_V_CM_S = 3.0f;
+// Only integrate near the target and almost stopped.
+// This prevents integral wind-up during transients.
+static const float I_ENABLE_X_CM   = 1.8f;
+static const float I_ENABLE_V_CM_S = 0.8f;
 
 // ------------------- runtime state -------------------------------------------
 enum Mode : uint8_t { M0_IDLE = 0, M1_MANUAL = 1, M2_POSITION = 2 };
@@ -168,6 +171,10 @@ static float    theta_m1_manual   = 0.0f;
 static uint32_t next_tick_ms      = 0;
 static const uint32_t CONTROLLER_REV = 4;
 
+static bool     stair_active       = false;
+static uint8_t  stair_stage        = 0;
+static uint32_t stair_stage_start_ms = 0;
+
 // ------------------- forward declarations ------------------------------------
 static float clampf(float v, float lo, float hi);
 static bool  read_sharp_cm(float *d_cm, float *adc_mean, float *volts);
@@ -178,6 +185,11 @@ static float steps_to_theta_rel(long steps);
 static void  anchor_step_counter_to_as5600();
 static void  cancel_stepper_motion();
 static void  reset_outer_state();
+static void  cancel_staircase();
+static void  start_staircase();
+static void  update_staircase();
+static float staircase_target_cm(uint8_t stage);
+static void  apply_staircase_stage(uint8_t stage);
 static void  control_tick();
 static void  handle_serial();
 static void  process_command(const char *s);
@@ -230,8 +242,8 @@ void setup() {
   next_tick_ms = millis() + LOOP_MS;
 
   Serial.println(F("# ball-and-beam controller  (clean rebuild, rev 4)"));
-  Serial.println(F("# M0 idle | M1 manual open-loop angle | M2 position control"));
-  Serial.println(F("# cmds: M0/M1/M2  G  X  T  O  S<cm>  A<deg>  K<scale>  Y  ?"));
+  Serial.println(F("# M0 idle | M1 manual open-loop angle | M2 observer control + gated I-trim"));
+  Serial.println(F("# cmds: M0/M1/M2  G  X  T  O  E  S<cm>  A<deg>  K<scale>  Y  ?"));
   print_header();
 }
 
@@ -258,6 +270,8 @@ void loop() {
 //                               CONTROL TICK
 // =============================================================================
 static void control_tick() {
+  update_staircase();
+
   // ---- 1. Read distance -----------------------------------------------------
   float adc_mean = 0.0f, volts = 0.0f, d_new = 0.0f;
   bool  d_valid  = read_sharp_cm(&d_new, &adc_mean, &volts);
@@ -331,11 +345,16 @@ static void control_tick() {
       float Kd = Kd_base * K_scale;
       float Ki = Ki_base * K_scale;
 
-      // Slow integral only when the ball is not moving fast.
-      // This helps recover from static offset without feeding limit cycles.
-      if (fabsf(v_hat_cm_s) < I_ENABLE_V_CM_S) {
-        xi_cm_s += x_hat_cm * LOOP_DT;
-        xi_cm_s = clampf(xi_cm_s, -XI_LIMIT_CM_S, XI_LIMIT_CM_S);
+      // Small integral trim only near the target and nearly stopped.  With
+      // Ki = 0, keep xi at zero so telemetry reflects pure PD.
+      if (Ki > 0.0f) {
+        if (fabsf(x_hat_cm) < I_ENABLE_X_CM &&
+            fabsf(v_hat_cm_s) < I_ENABLE_V_CM_S) {
+          xi_cm_s += x_hat_cm * LOOP_DT;
+          xi_cm_s = clampf(xi_cm_s, -XI_LIMIT_CM_S, XI_LIMIT_CM_S);
+        }
+      } else {
+        xi_cm_s = 0.0f;
       }
 
       float theta_unsat =
@@ -344,6 +363,7 @@ static void control_tick() {
       theta_cmd = clampf(theta_unsat, -THETA_MAX_DEG, THETA_MAX_DEG);
       theta_cmd_rel_deg = theta_cmd;
     } else if (invalid_count >= INVALID_SAFE_MAX) {
+      cancel_staircase();
       mode = M0_IDLE;
       cancel_stepper_motion();
       stepper.disableOutputs();
@@ -407,6 +427,66 @@ static void reset_outer_state() {
     x_dot_cm_s  = 0.0f;
     xi_cm_s     = 0.0f;
     obs_init    = false;
+  }
+}
+
+// =============================================================================
+//                              SETPOINT STAIRCASE
+// =============================================================================
+static void cancel_staircase() {
+  stair_active = false;
+}
+
+static float staircase_target_cm(uint8_t stage) {
+  if (stage == 0) return STAIR_FAR_CM;
+  if (stage == 1) return STAIR_CENTER_CM;
+  return STAIR_NEAR_CM;
+}
+
+static void apply_staircase_stage(uint8_t stage) {
+  setpoint_cm = staircase_target_cm(stage);
+  reset_outer_state();
+
+  Serial.print(F("# staircase "));
+  Serial.print(stage + 1);
+  Serial.print(F("/3: "));
+  if (stage == 0) {
+    Serial.print(F("far"));
+  } else if (stage == 1) {
+    Serial.print(F("center"));
+  } else {
+    Serial.print(F("near"));
+  }
+  Serial.print(F(" setpoint = "));
+  Serial.println(setpoint_cm, 3);
+}
+
+static void start_staircase() {
+  stair_active = true;
+  stair_stage = 0;
+  stair_stage_start_ms = millis();
+  apply_staircase_stage(stair_stage);
+
+  if (mode != M2_POSITION) {
+    Serial.println(F("# note: staircase is active; use M2 to run position control"));
+  }
+}
+
+static void update_staircase() {
+  if (!stair_active) return;
+
+  uint32_t now = millis();
+  while (stair_active &&
+         (uint32_t)(now - stair_stage_start_ms) >= STAIR_STAGE_MS) {
+    stair_stage_start_ms += STAIR_STAGE_MS;
+    stair_stage++;
+
+    if (stair_stage >= 3) {
+      stair_active = false;
+      Serial.println(F("# staircase complete (holding final setpoint)"));
+    } else {
+      apply_staircase_stage(stair_stage);
+    }
   }
 }
 
@@ -488,11 +568,13 @@ static void process_command(const char *s) {
     case 'M': case 'm': {
       char d = *(s + 1);
       if (d == '0') {
+        cancel_staircase();
         mode = M0_IDLE;
         cancel_stepper_motion();                           // [1] rev 2
         reset_outer_state();
         Serial.println(F("# mode = M0 (idle, motion cancelled)"));
       } else if (d == '1') {
+        cancel_staircase();
         mode = M1_MANUAL;
         theta_m1_manual = 0.0f;
         reset_outer_state();
@@ -500,7 +582,7 @@ static void process_command(const char *s) {
       } else if (d == '2') {
         reset_outer_state();
         mode = M2_POSITION;
-        Serial.println(F("# mode = M2 (observer PI-D position control)"));
+        Serial.println(F("# mode = M2 (observer position control with gated I-trim)"));
       } else {
         Serial.println(F("# ? M: expected M0|M1|M2"));
       }
@@ -518,10 +600,13 @@ static void process_command(const char *s) {
       break;
     }
     case 'X': case 'x': {
-      cancel_stepper_motion();                             // [1] rev 2
+      cancel_staircase();
+      mode = M0_IDLE;
+      cancel_stepper_motion();
+      reset_outer_state();
       stepper.disableOutputs();
       driver_enabled = false;
-      Serial.println(F("# driver DISABLED (motion cancelled)"));
+      Serial.println(F("# driver DISABLED, mode = M0 (motion cancelled)"));
       break;
     }
     case 'T': case 't': {
@@ -535,9 +620,14 @@ static void process_command(const char *s) {
       print_telemetry();
       break;
     }
+    case 'E': case 'e': {
+      start_staircase();
+      break;
+    }
     case 'S': case 's': {
       float v = atof(s + 1);
       if (v >= D_MIN_CM + 0.5f && v <= D_MAX_CM - 0.5f) {
+        cancel_staircase();
         setpoint_cm = v;
         reset_outer_state();
         Serial.print(F("# setpoint = ")); Serial.println(setpoint_cm, 3);
@@ -587,6 +677,12 @@ static void print_config() {
   Serial.print(F("# mode             = ")); Serial.println((int)mode);
   Serial.print(F("# driver           = ")); Serial.println(driver_enabled ? F("on") : F("off"));
   Serial.print(F("# setpoint_cm      = ")); Serial.println(setpoint_cm, 3);
+  Serial.print(F("# staircase        = ")); Serial.println(stair_active ? F("active") : F("off"));
+  Serial.print(F("# staircase_stage  = ")); Serial.println((int)stair_stage);
+  Serial.print(F("# stair_far_cm     = ")); Serial.println(STAIR_FAR_CM, 3);
+  Serial.print(F("# stair_center_cm  = ")); Serial.println(STAIR_CENTER_CM, 3);
+  Serial.print(F("# stair_near_cm    = ")); Serial.println(STAIR_NEAR_CM, 3);
+  Serial.print(F("# stair_stage_ms   = ")); Serial.println(STAIR_STAGE_MS);
   Serial.print(F("# Kp_base          = ")); Serial.println(Kp_base, 4);
   Serial.print(F("# Kd_base          = ")); Serial.println(Kd_base, 4);
   Serial.print(F("# Ki_base          = ")); Serial.println(Ki_base, 4);
@@ -600,6 +696,7 @@ static void print_config() {
   Serial.print(F("# obs_alpha        = ")); Serial.println(OBS_ALPHA, 3);
   Serial.print(F("# obs_beta         = ")); Serial.println(OBS_BETA, 3);
   Serial.print(F("# xi_limit_cm_s    = ")); Serial.println(XI_LIMIT_CM_S, 3);
+  Serial.print(F("# i_enable_x_cm    = ")); Serial.println(I_ENABLE_X_CM, 3);
   Serial.print(F("# i_enable_v_cm_s  = ")); Serial.println(I_ENABLE_V_CM_S, 3);
   Serial.print(F("# steps_per_beam_d = ")); Serial.println(STEPS_PER_BEAM_DEG, 3);
   Serial.print(F("# step_sign        = ")); Serial.println(STEP_SIGN, 1);
@@ -612,8 +709,9 @@ static void print_config() {
 // =============================================================================
 // Rev 3: plain CSV header (no "# CSV: " prefix) so the Python monitor's
 // `t_ms,` prefix detector matches. Columns:
-//   t_ms,mode,d_valid,theta_valid,adc_mean,adc_volts,d_raw,d_filt,setp,x,xdot,
-//   theta_cal,theta_rel_meas,theta_cmd,theta_err,step_pos,step_target,invalid_n,rev
+//   t_ms,mode,d_valid,theta_valid,adc_mean,adc_volts,d_raw,d_filt,setp,x,
+//   x_hat,v_hat,xi,theta_cal,theta_rel_meas,theta_cmd,theta_err,step_pos,
+//   step_target,driver,invalid_n,rev
 static void print_header() {
   Serial.println(F("t_ms,mode,d_valid,theta_valid,adc_mean,adc_volts,"
                    "d_raw,d_filt,setp,x,x_hat,v_hat,xi,"
