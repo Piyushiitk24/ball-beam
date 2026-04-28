@@ -1,5 +1,6 @@
-// =============================================================================
-// Ball-and-Beam Controller - clean rebuild, rev 4
+// E
+=============================================================================
+// Ball-and-Beam Controller - clean rebuild, rev 5
 // -----------------------------------------------------------------------------
 // Current control architecture:
 //   Sharp IR distance -> light position smoothing -> alpha-beta observer.
@@ -92,12 +93,12 @@ static const float    STEPPER_ACCEL      = 20000.0f;
 static AccelStepper   stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 // ------------------- controller ----------------------------------------------
-// Rev 4 direction:
+// Rev 5 direction:
 //   Observer-PD for main behavior, with a small integral trim only for final
 //   static offset removal.
 static float Kp_base        = 0.55f;    // deg / cm
 static float Kd_base        = 0.33f;    // deg / (cm/s)
-static float Ki_base        = 0.02f;    // deg / (cm*s)
+static float Ki_base        = 0.035f;   // deg / (cm*s)
 static float K_scale        = 1.0f;
 static float outer_sign     = -1.0f;
 static float setpoint_cm    = 10.00f;
@@ -122,12 +123,12 @@ static const float OBS_BETA      = 0.08f;
 // Integral term is only for slow/static offset.
 // Units: cm*s.  Ki * XI_LIMIT ≈ max integral contribution in degrees.
 // Keep this trim small; the previous 0.9 deg limit produced bias.
-static const float XI_LIMIT_CM_S = 10.0f;
+static const float XI_LIMIT_CM_S = 14.0f;
 
 // Only integrate near the target and almost stopped.
 // This prevents integral wind-up during transients.
-static const float I_ENABLE_X_CM   = 1.8f;
-static const float I_ENABLE_V_CM_S = 0.8f;
+static const float I_ENABLE_X_CM   = 2.5f;
+static const float I_ENABLE_V_CM_S = 1.2f;
 
 // ------------------- runtime state -------------------------------------------
 enum Mode : uint8_t { M0_IDLE = 0, M1_MANUAL = 1, M2_POSITION = 2 };
@@ -169,7 +170,7 @@ static float    theta_cmd_rel_deg = 0.0f;
 static float    theta_m1_manual   = 0.0f;
 
 static uint32_t next_tick_ms      = 0;
-static const uint32_t CONTROLLER_REV = 4;
+static const uint32_t CONTROLLER_REV = 5;
 
 static bool     stair_active       = false;
 static uint8_t  stair_stage        = 0;
@@ -241,7 +242,7 @@ void setup() {
 
   next_tick_ms = millis() + LOOP_MS;
 
-  Serial.println(F("# ball-and-beam controller  (clean rebuild, rev 4)"));
+  Serial.println(F("# ball-and-beam controller  (clean rebuild, rev 5)"));
   Serial.println(F("# M0 idle | M1 manual open-loop angle | M2 observer control + gated I-trim"));
   Serial.println(F("# cmds: M0/M1/M2  G  X  T  O  E  S<cm>  A<deg>  K<scale>  Y  ?"));
   print_header();
@@ -318,12 +319,16 @@ static void control_tick() {
         xi_cm_s     = 0.0f;
         obs_init    = true;
       } else {
-        float x_pred = x_hat_cm + v_hat_cm_s * LOOP_DT;
-        float resid  = x_cm - x_pred;
+        float x_pred  = x_hat_cm + v_hat_cm_s * LOOP_DT;
+        float resid   = x_cm - x_pred;
+
+        // Limit only the velocity correction so Sharp IR jitter does not create
+        // unrealistically large velocity kicks. Position correction remains responsive.
+        float resid_v = clampf(resid, -0.55f, 0.55f);
 
         x_hat_cm   = x_pred + OBS_ALPHA * resid;
-        v_hat_cm_s = v_hat_cm_s + (OBS_BETA / LOOP_DT) * resid;
-        x_dot_cm_s = v_hat_cm_s;   // telemetry compatibility
+        v_hat_cm_s = v_hat_cm_s + (OBS_BETA / LOOP_DT) * resid_v;
+        x_dot_cm_s = v_hat_cm_s;
       }
     }
 
