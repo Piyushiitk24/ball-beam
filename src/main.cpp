@@ -1,6 +1,6 @@
 // E
-=============================================================================
-// Ball-and-Beam Controller - clean rebuild, rev 5
+// =============================================================================
+// Ball-and-Beam Controller - clean rebuild, rev 8
 // -----------------------------------------------------------------------------
 // Current control architecture:
 //   Sharp IR distance -> light position smoothing -> alpha-beta observer.
@@ -8,9 +8,10 @@
 //     x_hat_cm    = ball position error relative to setpoint
 //     v_hat_cm_s  = ball velocity estimate
 //
-//   M2 uses observer position control with gated I-trim:
+//   M2 uses observer position control with equilibrium feedforward + gated I-trim:
 //     theta_cmd_rel =
-//       outer_sign * (Kp*x_hat + Kd*v_hat + Ki*xi)   clamped
+//       theta_ff(setpoint) + outer_sign * (Kp*x_hat + Kd*v_hat + Ki*xi)
+//     clamped
 //
 //   The integral term is deliberately small and gated.  It trims final static
 //   offset only when the ball is near the setpoint and nearly stopped.
@@ -22,7 +23,7 @@
 // Operating modes / serial protocol:
 //   M0 idle
 //   M1 manual open-loop beam angle command
-//   M2 observer position control with gated I-trim
+//   M2 observer position control with feedforward trim + gated I-trim
 //   G  enable driver and re-anchor step counter to AS5600
 //   X  safe stop: enter M0, cancel motion, reset observer/integrator, disable
 //      driver
@@ -93,9 +94,9 @@ static const float    STEPPER_ACCEL      = 20000.0f;
 static AccelStepper   stepper(AccelStepper::DRIVER, STEP_PIN, DIR_PIN);
 
 // ------------------- controller ----------------------------------------------
-// Rev 5 direction:
-//   Observer-PD for main behavior, with a small integral trim only for final
-//   static offset removal.
+// Rev 8 direction:
+//   Observer-PD for main behavior, empirical setpoint feedforward for static
+//   bias, and small integral trim only for final residual offset removal.
 static float Kp_base        = 0.55f;    // deg / cm
 static float Kd_base        = 0.33f;    // deg / (cm/s)
 static float Ki_base        = 0.035f;   // deg / (cm*s)
@@ -106,7 +107,7 @@ static float setpoint_cm    = 10.00f;
 // Built-in setpoint staircase for repeatable response tests.
 static const float    STAIR_FAR_CM     = 12.50f;
 static const float    STAIR_CENTER_CM  = 10.00f;
-static const float    STAIR_NEAR_CM    = 7.50f;
+static const float    STAIR_NEAR_CM    = 7.00f;
 static const uint32_t STAIR_STAGE_MS   = 20000UL;
 
 static const float THETA_MAX_DEG = 4.0f;
@@ -127,8 +128,9 @@ static const float XI_LIMIT_CM_S = 14.0f;
 
 // Only integrate near the target and almost stopped.
 // This prevents integral wind-up during transients.
-static const float I_ENABLE_X_CM   = 2.5f;
-static const float I_ENABLE_V_CM_S = 1.2f;
+static const float I_ENABLE_X_CM   = 0.7f;
+static const float I_ENABLE_V_CM_S = 0.4f;
+static const uint32_t I_HOLDOFF_MS = 3000UL;
 
 // ------------------- runtime state -------------------------------------------
 enum Mode : uint8_t { M0_IDLE = 0, M1_MANUAL = 1, M2_POSITION = 2 };
@@ -170,7 +172,8 @@ static float    theta_cmd_rel_deg = 0.0f;
 static float    theta_m1_manual   = 0.0f;
 
 static uint32_t next_tick_ms      = 0;
-static const uint32_t CONTROLLER_REV = 5;
+static uint32_t i_enable_after_ms = 0;
+static const uint32_t CONTROLLER_REV = 8;
 
 static bool     stair_active       = false;
 static uint8_t  stair_stage        = 0;
@@ -183,6 +186,7 @@ static bool  read_as5600_raw_deg(float *raw_deg);
 static float as5600_cal_deg_from_raw(float raw_deg);
 static long  theta_rel_to_steps(float theta_rel_deg);
 static float steps_to_theta_rel(long steps);
+static float theta_ff_cm(float sp_cm);
 static void  anchor_step_counter_to_as5600();
 static void  cancel_stepper_motion();
 static void  reset_outer_state();
@@ -242,8 +246,8 @@ void setup() {
 
   next_tick_ms = millis() + LOOP_MS;
 
-  Serial.println(F("# ball-and-beam controller  (clean rebuild, rev 5)"));
-  Serial.println(F("# M0 idle | M1 manual open-loop angle | M2 observer control + gated I-trim"));
+  Serial.println(F("# ball-and-beam controller  (clean rebuild, rev 8)"));
+  Serial.println(F("# M0 idle | M1 manual angle | M2 observer control + ff trim + gated I"));
   Serial.println(F("# cmds: M0/M1/M2  G  X  T  O  E  S<cm>  A<deg>  K<scale>  Y  ?"));
   print_header();
 }
@@ -350,11 +354,15 @@ static void control_tick() {
       float Kd = Kd_base * K_scale;
       float Ki = Ki_base * K_scale;
 
-      // Small integral trim only near the target and nearly stopped.  With
+      // Small integral trim only after setpoint transients have settled.  With
       // Ki = 0, keep xi at zero so telemetry reflects pure PD.
       if (Ki > 0.0f) {
-        if (fabsf(x_hat_cm) < I_ENABLE_X_CM &&
-            fabsf(v_hat_cm_s) < I_ENABLE_V_CM_S) {
+        bool i_allowed =
+          (int32_t)(millis() - i_enable_after_ms) >= 0 &&
+          fabsf(x_hat_cm) < I_ENABLE_X_CM &&
+          fabsf(v_hat_cm_s) < I_ENABLE_V_CM_S;
+
+        if (i_allowed) {
           xi_cm_s += x_hat_cm * LOOP_DT;
           xi_cm_s = clampf(xi_cm_s, -XI_LIMIT_CM_S, XI_LIMIT_CM_S);
         }
@@ -363,6 +371,7 @@ static void control_tick() {
       }
 
       float theta_unsat =
+        theta_ff_cm(setpoint_cm) +
         outer_sign * (Kp * x_hat_cm + Kd * v_hat_cm_s + Ki * xi_cm_s);
 
       theta_cmd = clampf(theta_unsat, -THETA_MAX_DEG, THETA_MAX_DEG);
@@ -451,6 +460,7 @@ static float staircase_target_cm(uint8_t stage) {
 static void apply_staircase_stage(uint8_t stage) {
   setpoint_cm = staircase_target_cm(stage);
   reset_outer_state();
+  i_enable_after_ms = millis() + I_HOLDOFF_MS;
 
   Serial.print(F("# staircase "));
   Serial.print(stage + 1);
@@ -544,6 +554,24 @@ static float clampf(float v, float lo, float hi) {
   return v;
 }
 
+static float theta_ff_cm(float sp_cm) {
+  // Empirical equilibrium trim, deg. This compensates static bias only.
+  const float x0 = 7.0f,  y0 = 0.00f;
+  const float x1 = 10.0f, y1 = -0.70f;
+  const float x2 = 12.5f, y2 = 0.25f;
+
+  if (sp_cm <= x0) return y0;
+  if (sp_cm < x1) {
+    float r = (sp_cm - x0) / (x1 - x0);
+    return y0 + r * (y1 - y0);
+  }
+  if (sp_cm < x2) {
+    float r = (sp_cm - x1) / (x2 - x1);
+    return y1 + r * (y2 - y1);
+  }
+  return y2;
+}
+
 // =============================================================================
 //                              SERIAL INTERFACE
 // =============================================================================
@@ -587,7 +615,7 @@ static void process_command(const char *s) {
       } else if (d == '2') {
         reset_outer_state();
         mode = M2_POSITION;
-        Serial.println(F("# mode = M2 (observer position control with gated I-trim)"));
+        Serial.println(F("# mode = M2 (observer control + ff trim + gated I)"));
       } else {
         Serial.println(F("# ? M: expected M0|M1|M2"));
       }
@@ -635,6 +663,7 @@ static void process_command(const char *s) {
         cancel_staircase();
         setpoint_cm = v;
         reset_outer_state();
+        i_enable_after_ms = millis() + I_HOLDOFF_MS;
         Serial.print(F("# setpoint = ")); Serial.println(setpoint_cm, 3);
       } else {
         Serial.println(F("# ? S: out of safe range"));
@@ -688,6 +717,7 @@ static void print_config() {
   Serial.print(F("# stair_center_cm  = ")); Serial.println(STAIR_CENTER_CM, 3);
   Serial.print(F("# stair_near_cm    = ")); Serial.println(STAIR_NEAR_CM, 3);
   Serial.print(F("# stair_stage_ms   = ")); Serial.println(STAIR_STAGE_MS);
+  Serial.print(F("# theta_ff_deg     = ")); Serial.println(theta_ff_cm(setpoint_cm), 3);
   Serial.print(F("# Kp_base          = ")); Serial.println(Kp_base, 4);
   Serial.print(F("# Kd_base          = ")); Serial.println(Kd_base, 4);
   Serial.print(F("# Ki_base          = ")); Serial.println(Ki_base, 4);
@@ -703,6 +733,7 @@ static void print_config() {
   Serial.print(F("# xi_limit_cm_s    = ")); Serial.println(XI_LIMIT_CM_S, 3);
   Serial.print(F("# i_enable_x_cm    = ")); Serial.println(I_ENABLE_X_CM, 3);
   Serial.print(F("# i_enable_v_cm_s  = ")); Serial.println(I_ENABLE_V_CM_S, 3);
+  Serial.print(F("# i_holdoff_ms     = ")); Serial.println(I_HOLDOFF_MS);
   Serial.print(F("# steps_per_beam_d = ")); Serial.println(STEPS_PER_BEAM_DEG, 3);
   Serial.print(F("# step_sign        = ")); Serial.println(STEP_SIGN, 1);
   Serial.print(F("# balance_cal_deg  = ")); Serial.println(THETA_BALANCE_CAL_DEG, 5);
